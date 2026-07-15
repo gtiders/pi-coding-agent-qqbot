@@ -26,5 +26,16 @@ const current = normalizeConfig({
 assert.equal(current.schemaVersion, 2);
 assert.equal(current.startup.mode, "auto");
 assert.equal(current.commands.modelPageSize, 1);
+assert.equal(legacy.progress.enabled, true);
+assert.equal(legacy.progress.ackAfterMs, 3000);
+
+const withProgress = normalizeConfig({
+	enabled: true,
+	appId: "test",
+	clientSecret: "test",
+	progress: { enabled: false, ackAfterMs: 5000 },
+});
+assert.equal(withProgress.progress.enabled, false);
+assert.equal(withProgress.progress.ackAfterMs, 5000);
 
 console.log("config.test.ts: ok");

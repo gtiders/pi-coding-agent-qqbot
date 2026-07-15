@@ -1,6 +1,6 @@
 # Pi Coding Agent QQBot
 
-> Package/extension name: `pi-qqbot`
+> Package/extension name: `@XiaoSQM/pi-qqbot`
 
 [中文](#中文说明) | [English](#english)
 
@@ -56,12 +56,20 @@ QQ 用户发送文本/附件
 ```bash
 mkdir -p ~/.pi/agent/extensions
 cd ~/.pi/agent/extensions
-git clone https://github.com/wunaitianwang/pi-coding-agent-qqbot.git pi-qqbot
+pi install npm:@XiaoSQM/pi-qqbot
+```
+
+或从源码安装：
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+cd ~/.pi/agent/extensions
+git clone https://github.com/XiaoSQM/pi-coding-agent-qqbot.git pi-qqbot
 cd pi-qqbot
 npm install
 ```
 
-然后确认 Pi 的全局扩展配置启用了 `pi-qqbot`。如果你已经在 `~/.pi/agent/settings.json` 里启用了该扩展，重载 Pi 即可。
+然后确认 Pi 的全局扩展配置启用了该扩展。如果你已经在 `~/.pi/agent/settings.json` 里启用了该扩展，重载 Pi 即可。
 
 ### 配置
 
@@ -111,6 +119,10 @@ chmod 600 ~/.pi/agent/pi-qqbot.json
   },
   "showProcess": false,
   "replyFormat": "auto",
+  "progress": {
+    "enabled": true,
+    "ackAfterMs": 3000
+  },
   "media": {
     "enabled": true,
     "maxAttachments": 4,
@@ -150,6 +162,8 @@ chmod 600 ~/.pi/agent/pi-qqbot.json
 - `sessions.mode`: `persistent` 将 QQ 历史保存到独立目录；`memory` 仅用于临时测试。
 - `sessions.restore`: 启动时恢复最近 QQ 会话或新建。
 - `showProcess`: 是否在最终答案之后附带最多 6 条精简执行摘要。
+- `progress.enabled`: 任务仍在执行超过 `progress.ackAfterMs` 时，发送一条“已收到，正在处理”的被动回执（占用 1 次回复配额）。
+- `progress.ackAfterMs`: 慢任务回执延迟（毫秒）；`0` 表示任务一开始就发送。
 - `replyFormat`: `auto` 优先发送 QQ 原生 Markdown并在格式被拒绝时回退纯文本；`plain` 始终发送纯文本。
 - `media`: 富媒体总开关及数量、总大小、下载超时和分类型限制；数值会被安全硬上限 clamp。
 - `media.image`: 图片开关和单图大小限制。
@@ -335,13 +349,21 @@ Clone this repository into Pi's extension directory:
 ```bash
 mkdir -p ~/.pi/agent/extensions
 cd ~/.pi/agent/extensions
-git clone https://github.com/wunaitianwang/pi-coding-agent-qqbot.git pi-qqbot
+pi install npm:@XiaoSQM/pi-qqbot
+```
+
+Or install from source:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+cd ~/.pi/agent/extensions
+git clone https://github.com/XiaoSQM/pi-coding-agent-qqbot.git pi-qqbot
 cd pi-qqbot
 npm install
 ```
 
 Then make sure the extension is enabled in Pi's global extension settings. If
-`pi-qqbot` is already enabled in `~/.pi/agent/settings.json`, reload Pi.
+it is already enabled in `~/.pi/agent/settings.json`, reload Pi.
 
 ### Configuration
 
@@ -391,6 +413,10 @@ Edit `~/.pi/agent/pi-qqbot.json`:
   },
   "showProcess": false,
   "replyFormat": "auto",
+  "progress": {
+    "enabled": true,
+    "ackAfterMs": 3000
+  },
   "media": {
     "enabled": true,
     "maxAttachments": 4,
@@ -431,6 +457,8 @@ Fields:
 - `sessions.mode`: `persistent` stores QQ-only history; `memory` is for temporary testing.
 - `sessions.restore`: Continue the most recent QQ session or create a fresh one on runtime initialization.
 - `showProcess`: Append up to six compact execution-summary items after the final answer.
+- `progress.enabled`: Send one passive “processing” ack if a task is still running after `progress.ackAfterMs` (uses one reply slot).
+- `progress.ackAfterMs`: Delay in milliseconds before the slow-task ack; `0` sends immediately when the run starts.
 - `media`: Media switch plus bounded attachment count, total bytes, timeout, image, voice, and document limits. Numeric settings are clamped to hard safety caps.
 - `debug`: Enable local debug notifications and `/qqbot-fake`.
 

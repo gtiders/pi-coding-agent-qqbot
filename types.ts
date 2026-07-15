@@ -43,6 +43,14 @@ export interface QQMediaConfig {
 
 export type QQReplyFormat = "auto" | "plain";
 
+/** Optional slow-task progress feedback sent as a passive QQ reply. */
+export interface QQProgressConfig {
+	/** Send one "processing" ack if the agent task is still running after ackAfterMs. */
+	enabled: boolean;
+	/** Delay before the slow-task ack. 0 sends as soon as the run starts. */
+	ackAfterMs: number;
+}
+
 export interface QQCommandConfig {
 	enabled: boolean;
 	accessRequests: boolean;
@@ -93,6 +101,8 @@ export interface PiQQBotConfig {
 	showProcess?: boolean;
 	/** Prefer native QQ Markdown with a safe plain-text fallback, or force plain text. */
 	replyFormat: QQReplyFormat;
+	/** Slow-task progress ack inside the passive-reply budget. */
+	progress: QQProgressConfig;
 	media: QQMediaConfig;
 	debug?: boolean;
 }

@@ -34,6 +34,10 @@
   },
   "showProcess": false,
   "replyFormat": "auto",
+  "progress": {
+    "enabled": true,
+    "ackAfterMs": 3000
+  },
   "media": {
     "enabled": true,
     "maxAttachments": 4,

@@ -17,8 +17,9 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 import { authorizeQQCommand, QQ_COMMAND_NAMES, QQ_REMOTE_BLOCKED_COMMANDS } from "./command-controller";
-import { parseQQCommand, type ParsedQQCommand } from "./command-parser";
+import { normalizeCommandText, parseQQCommand, type ParsedQQCommand } from "./command-parser";
 import { ConversationRegistry, conversationKey } from "./conversation-registry";
+import { formatUserFacingAgentError, humanizeSessionPreview } from "./user-facing";
 
 import { QQAccessRequestStore, type QQAccessRequest } from "./access-requests";
 import { AttachmentPipeline, classifyAttachment } from "./attachment-pipeline";
@@ -94,6 +95,10 @@ export class PiQQBotRuntime {
 	private pumpTimer?: ReturnType<typeof setTimeout>;
 	private fakeCounter = 0;
 	private observer?: QQConversationObserver;
+	/** Next passive-reply msg_seq per inbound msg_id (acks and multi-chunk answers share one budget). */
+	private readonly nextMsgSeq = new Map<string, number>();
+	/** msg_ids that already received a slow-task progress ack. */
+	private readonly progressAckSent = new Set<string>();
 
 	constructor(config: PiQQBotConfig) {
 		this.config = config;
@@ -113,6 +118,7 @@ export class PiQQBotRuntime {
 			sendBusyNotice: config.sendBusyNotice,
 			showProcess: config.showProcess,
 			replyFormat: config.replyFormat,
+			progress: { ...config.progress },
 			debug: config.debug,
 			commands: { ...config.commands, admins: [...config.commands.admins] },
 		};
@@ -249,7 +255,10 @@ export class PiQQBotRuntime {
 		} catch (err) {
 			this.lastError = `qq session init failed: ${err instanceof Error ? err.message : String(err)}`;
 			this.emit({ kind: "error", messageId: msg.id, stage: "session init", message: this.lastError, at: Date.now() });
-			await this.replyToQQ(msg, `## QQ 会话不可用\n\n${this.lastError}\n\n请稍后重试，或在主机查看 /qqbot-status。`).catch(() => undefined);
+			await this.replyToQQ(
+				msg,
+				`## QQ 会话不可用\n\n${formatUserFacingAgentError(err)}\n\n请稍后重试，或在主机查看 /qqbot-status。`,
+			).catch(() => undefined);
 			this.schedulePump();
 			return;
 		}
@@ -266,6 +275,23 @@ export class PiQQBotRuntime {
 		this.emit({ kind: "run_start", messageId: msg.id, at: Date.now() });
 		this.emitRuntimeState();
 		let prepared: Awaited<ReturnType<AttachmentPipeline["prepare"]>> | undefined;
+		let ackTimer: ReturnType<typeof setTimeout> | undefined;
+		let ackCancelled = false;
+		const cancelProgressAck = (): void => {
+			ackCancelled = true;
+			if (ackTimer) {
+				clearTimeout(ackTimer);
+				ackTimer = undefined;
+			}
+		};
+		if (this.config.progress.enabled && !msg.fake) {
+			const delay = this.config.progress.ackAfterMs;
+			const sendAck = () => {
+				if (!ackCancelled && this.running && this.activeTarget?.msgId === msg.id) void this.sendProgressAck(msg);
+			};
+			if (delay <= 0) sendAck();
+			else ackTimer = setTimeout(sendAck, delay);
+		}
 		try {
 			prepared = await this.attachmentPipeline.prepare(msg, this.runtimeAbort.signal, {
 				onStart: (index, total, attachmentKind, filename) => {
@@ -301,11 +327,13 @@ export class PiQQBotRuntime {
 				const reply = msg.text.trim()
 					? "当前 QQ Agent 使用的模型不支持图片理解。我没有读取图片；请切换到支持视觉输入的模型后重试。你的文字内容也未提交，以避免产生误导性回答。"
 					: "当前 QQ Agent 使用的模型不支持图片理解，因此没有运行可能产生误导的模型回合。请切换到支持视觉输入的模型后重试。";
+				cancelProgressAck();
 				await this.deliverReply(target, reply, this.activeFake);
 				return;
 			}
 
 			if (!hasUsableAgentInput(msg, prepared.resources)) {
+				cancelProgressAck();
 				await this.deliverReply(target, formatAttachmentFailures(prepared.resources), this.activeFake);
 				return;
 			}
@@ -316,23 +344,41 @@ export class PiQQBotRuntime {
 			const body = this.config.showProcess
 				? formatWithProcess(buildTranscript(tools), text)
 				: text;
+			cancelProgressAck();
 			if (body.trim()) {
 				await this.deliverReply(target, body, this.activeFake);
 			} else {
-				this.debugLog("assistant produced no text; nothing to send");
+				this.debugLog("assistant produced no text; sending empty-result fallback");
+				await this.deliverReply(
+					target,
+					"本次没有生成可发送的文本结果。可以换个问法，或发送 /status 查看状态。",
+					this.activeFake,
+				);
 			}
 		} catch (err) {
+			cancelProgressAck();
 			if (!this.runtimeAbort.signal.aborted) {
 				this.lastError = `qq session run failed: ${err instanceof Error ? err.message : String(err)}`;
 				this.emit({ kind: "error", messageId: msg.id, stage: "agent run", message: this.lastError, at: Date.now() });
 				this.debugLog(this.lastError);
+				await this.deliverReply(
+					target,
+					`## 处理失败\n\n${formatUserFacingAgentError(err)}`,
+					this.activeFake,
+					this.commandKeyboard(msg, [[{ label: "当前状态", command: "/status", primary: true }, { label: "停止任务", command: "/stop" }]]),
+				).catch((sendErr) => {
+					this.debugLog(`failed to deliver error reply: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`);
+				});
 			}
 		} finally {
+			cancelProgressAck();
 			await prepared?.cleanup().catch(() => undefined);
 			this.running = false;
 			this.activeTarget = undefined;
 			this.activeFake = false;
 			this.activeAttachmentStatus = undefined;
+			this.nextMsgSeq.delete(msg.id);
+			this.progressAckSent.delete(msg.id);
 			this.emit({ kind: "run_end", messageId: msg.id, at: Date.now() });
 			this.emitRuntimeState();
 			this.schedulePump();
@@ -413,7 +459,7 @@ export class PiQQBotRuntime {
 			return;
 		}
 
-		const text = msg.text.trim();
+		const text = normalizeCommandText(msg.text);
 		this.emit({
 			kind: "inbound",
 			messageId: msg.id,
@@ -796,7 +842,7 @@ export class PiQQBotRuntime {
 		const rows: QQCommandButton[][] = [];
 		for (let index = 0; index < sessions.length; index += 2) {
 			rows.push(sessions.slice(index, index + 2).map((session) => ({
-				label: session.name?.slice(0, 14) || shortId(session.id),
+				label: sessionButtonLabel(session),
 				command: `/resume ${shortId(session.id)}`,
 			})));
 		}
@@ -908,10 +954,12 @@ export class PiQQBotRuntime {
 		}
 
 		let sentChunks = 0;
-		let nextMsgSeq = 1;
+		let nextMsgSeq = this.nextMsgSeq.get(target.msgId) ?? 1;
+		const usedBefore = nextMsgSeq - 1;
+		const maxChunks = Math.max(0, Math.min(chunks.length, QQ_MAX_REPLY_CHUNKS - usedBefore));
 		let useMarkdown = this.config.replyFormat !== "plain";
 		let delivery = useMarkdown ? "markdown" : "plain";
-		for (let i = 0; i < chunks.length && i < QQ_MAX_REPLY_CHUNKS; i++) {
+		for (let i = 0; i < maxChunks; i++) {
 			try {
 				if (!useMarkdown) {
 					await this.api.sendText(target, formatted.plain[i], nextMsgSeq++);
@@ -921,7 +969,7 @@ export class PiQQBotRuntime {
 						formatted.markdown[i],
 						formatted.plain[i],
 						nextMsgSeq,
-						i === chunks.length - 1 ? keyboard : undefined,
+						i === maxChunks - 1 ? keyboard : undefined,
 					);
 					nextMsgSeq += fellBack ? 2 : 1;
 					if (fellBack) {
@@ -929,6 +977,7 @@ export class PiQQBotRuntime {
 						delivery = "plain-fallback";
 					}
 				}
+				this.nextMsgSeq.set(target.msgId, nextMsgSeq);
 				sentChunks++;
 			} catch (err) {
 				const detail = err instanceof QQApiError ? err.message : String(err);
@@ -988,9 +1037,36 @@ export class PiQQBotRuntime {
 			createdAt: Date.now(),
 		};
 		try {
-			await this.api.sendText(target, "当前消息较多，请稍后重试。", 1);
+			const seq = this.nextMsgSeq.get(msg.id) ?? 1;
+			await this.api.sendText(target, "当前消息较多，请稍后重试。需要中止排队中的任务可发送 /stop。", seq);
+			this.nextMsgSeq.set(msg.id, seq + 1);
 		} catch (err) {
 			this.debugLog(`busy notice failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	private async sendProgressAck(msg: QQInboundMessage): Promise<void> {
+		if (!this.api || msg.fake) return;
+		if (this.progressAckSent.has(msg.id)) return;
+		const used = (this.nextMsgSeq.get(msg.id) ?? 1) - 1;
+		if (used >= QQ_MAX_REPLY_CHUNKS) return;
+		// Reserve seq before awaiting so a concurrent final reply cannot collide.
+		const seq = this.nextMsgSeq.get(msg.id) ?? 1;
+		this.nextMsgSeq.set(msg.id, seq + 1);
+		this.progressAckSent.add(msg.id);
+		const target: QQReplyTarget = {
+			type: msg.type,
+			userOpenId: msg.userOpenId,
+			groupOpenId: msg.groupOpenId,
+			msgId: msg.id,
+			createdAt: Date.now(),
+		};
+		try {
+			// Plain text keeps the ack cheap and avoids spending a Markdown attempt.
+			await this.api.sendText(target, "已收到，正在处理。需要中止请发送 /stop。", seq);
+			this.debugLog(`progress ack sent for msg_id=${sanitizeLogValue(msg.id)} seq=${seq}`);
+		} catch (err) {
+			this.debugLog(`progress ack failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
@@ -1004,6 +1080,7 @@ export class PiQQBotRuntime {
 			`session: isolated (${this.conversations ? "ready" : "not ready"}, resident ${this.conversations?.residentCount ?? 0})`,
 			`commands: ${this.config.commands.enabled ? "on (SDK control)" : "off"}`,
 			`process: ${this.config.showProcess ? "on" : "off"}`,
+			`progress ack: ${this.config.progress.enabled ? `on (${this.config.progress.ackAfterMs}ms)` : "off"}`,
 			`reply format: ${this.config.replyFormat}`,
 			`media: ${this.config.media.enabled ? "on" : "off"}`,
 			`active: ${this.activeTargetLabel()}`,
@@ -1112,13 +1189,33 @@ function rankModels(models: QQModelInfo[], query: string): QQModelInfo[] {
 }
 
 function sessionMatches(session: QQSessionInfo, query: string): boolean {
-	return `${session.name ?? ""} ${session.firstMessage} ${session.allMessagesText}`.toLowerCase().includes(query);
+	const preview = humanizeSessionPreview(session.firstMessage);
+	const haystack = `${session.name ?? ""} ${preview} ${humanizeSessionPreview(session.allMessagesText)}`.toLowerCase();
+	return haystack.includes(query);
 }
 
 function formatSessionLine(session: QQSessionInfo, index: number, currentId: string): string {
-	const title = escapeMarkdownInline(session.name ?? (truncate(session.firstMessage) || "未命名会话"));
+	const title = escapeMarkdownInline(sessionDisplayTitle(session));
 	const current = session.id === currentId ? " · 当前" : "";
-	return `${index + 1}. **${title}**${current}\n   \`${shortId(session.id)}\` · ${formatSessionTime(session.modified)} · ${session.messageCount} 条消息`;
+	const preview = humanizeSessionPreview(session.firstMessage);
+	const summary = preview && preview !== session.name ? `\n   摘要：${escapeMarkdownInline(preview)}` : "";
+	return `${index + 1}. **${title}**${current}\n   \`${shortId(session.id)}\` · ${formatSessionTime(session.modified)} · ${session.messageCount} 条消息${summary}`;
+}
+
+function sessionDisplayTitle(session: QQSessionInfo): string {
+	if (session.name?.trim()) return session.name.trim();
+	return humanizeSessionPreview(session.firstMessage) || "未命名会话";
+}
+
+function sessionButtonLabel(session: QQSessionInfo): string {
+	const title = sessionDisplayTitle(session);
+	if (session.name?.trim()) return title.slice(0, 14);
+	// Unnamed sessions: keep the short id scannable, optionally with a tiny hint.
+	const id = shortId(session.id);
+	const preview = humanizeSessionPreview(session.firstMessage);
+	if (!preview) return id;
+	const hint = preview.slice(0, 8);
+	return `${hint}·${id}`.slice(0, 14);
 }
 
 function formatSessionTime(value: Date): string {

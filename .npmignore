@@ -3,10 +3,15 @@ node_modules/
 .env.*
 *.log
 .DS_Store
+.git/
 
 # Real local QQ bot config. Keep only pi-qqbot.json.example in packages.
 pi-qqbot.json
 
-# Local release artifacts are uploaded separately when needed.
+# Local release artifacts and non-runtime docs.
 *.tgz
-.git/
+*.test.ts
+*PLAN*.md
+*OPTIMIZATION_PLAN.md
+*DEVELOPMENT_PLAN.md
+package-lock.json

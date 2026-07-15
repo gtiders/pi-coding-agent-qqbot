@@ -14,9 +14,21 @@ const COMMAND_ALIASES: Record<string, string> = {
 const MAX_COMMAND_BYTES = 2048;
 const MAX_ARGUMENTS = 20;
 
+/**
+ * Normalize user input before slash-command detection.
+ * Strips BOM/zero-width characters and accepts fullwidth "／".
+ */
+export function normalizeCommandText(text: string): string {
+	return text
+		.replace(/^\uFEFF/, "")
+		.replace(/[\u200B-\u200D\uFEFF]/g, "")
+		.replace(/^[／]/, "/")
+		.trim();
+}
+
 /** Parse one slash-prefixed QQ command without invoking a shell or a model. */
 export function parseQQCommand(text: string): ParsedQQCommand | undefined {
-	const source = text.trim();
+	const source = normalizeCommandText(text);
 	if (!source.startsWith("/")) return undefined;
 	if (Buffer.byteLength(source, "utf8") > MAX_COMMAND_BYTES) throw new Error("命令过长，请缩短后重试");
 	const separator = source.search(/\s/);

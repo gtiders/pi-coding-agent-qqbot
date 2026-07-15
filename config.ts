@@ -64,6 +64,10 @@ const DEFAULTS: PiQQBotConfig = {
 	},
 	showProcess: false,
 	replyFormat: "auto",
+	progress: {
+		enabled: true,
+		ackAfterMs: 3_000,
+	},
 	media: MEDIA_DEFAULTS,
 	debug: false,
 };
@@ -164,6 +168,7 @@ export function normalizeConfig(parsed: unknown): PiQQBotConfig {
 	const rawCommands = isRecord(raw.commands) ? raw.commands : {};
 	const rawSessions = isRecord(raw.sessions) ? raw.sessions : {};
 	const rawStartup = isRecord(raw.startup) ? raw.startup : {};
+	const rawProgress = isRecord(raw.progress) ? raw.progress : {};
 	const legacyAutoStart = bool(raw.autoStart, true);
 	// v0.3 exposed allowCommands but could not execute built-in Pi commands.
 	// New installs enable the explicit SDK command controller; an explicitly
@@ -217,6 +222,10 @@ export function normalizeConfig(parsed: unknown): PiQQBotConfig {
 		},
 		showProcess: bool(raw.showProcess, false),
 		replyFormat: raw.replyFormat === "plain" ? "plain" : "auto",
+		progress: {
+			enabled: bool(rawProgress.enabled, DEFAULTS.progress.enabled),
+			ackAfterMs: integer(rawProgress.ackAfterMs, DEFAULTS.progress.ackAfterMs, 0, 60_000),
+		},
 		debug: bool(raw.debug, false),
 		media: {
 			enabled: bool(rawMedia.enabled, MEDIA_DEFAULTS.enabled),

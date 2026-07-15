@@ -1,10 +1,12 @@
 {
-  "name": "pi-qqbot",
-  "version": "0.4.0",
+  "name": "@XiaoSQM/pi-qqbot",
+  "version": "0.4.5",
   "description": "A Pi extension that connects the official QQ Bot API to a local Pi coding agent.",
   "license": "Apache-2.0",
   "type": "module",
+  "author": "XiaoSQM",
   "keywords": [
+    "pi-package",
     "pi",
     "pi-extension",
     "qqbot",
@@ -13,22 +15,62 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/wunaitianwang/pi-coding-agent-qqbot.git"
+    "url": "git+https://github.com/XiaoSQM/pi-coding-agent-qqbot.git"
   },
   "bugs": {
-    "url": "https://github.com/wunaitianwang/pi-coding-agent-qqbot/issues"
+    "url": "https://github.com/XiaoSQM/pi-coding-agent-qqbot/issues"
   },
-  "homepage": "https://github.com/wunaitianwang/pi-coding-agent-qqbot#readme",
+  "homepage": "https://github.com/XiaoSQM/pi-coding-agent-qqbot#readme",
+  "files": [
+    "index.ts",
+    "access-requests.ts",
+    "attachment-downloader.ts",
+    "attachment-extractors.ts",
+    "attachment-pipeline.ts",
+    "command-controller.ts",
+    "command-parser.ts",
+    "config.ts",
+    "conversation-registry.ts",
+    "host-registry.ts",
+    "model-pages.ts",
+    "qq-api.ts",
+    "qq-auth.ts",
+    "qq-gateway.ts",
+    "qq-keyboard.ts",
+    "qq-session.ts",
+    "queue.ts",
+    "reply-formatter.ts",
+    "router.ts",
+    "stt.ts",
+    "terminal-view.ts",
+    "types.ts",
+    "user-facing.ts",
+    "pi-qqbot.json.example",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "pi": {
     "extensions": [
       "./index.ts"
     ]
   },
   "scripts": {
-    "test": "node --experimental-strip-types ./config.test.ts && node --experimental-strip-types ./model-pages.test.ts && node --experimental-strip-types ./qq-keyboard.test.ts"
+    "test": "node --experimental-strip-types ./config.test.ts && node --experimental-strip-types ./model-pages.test.ts && node --experimental-strip-types ./qq-keyboard.test.ts && node --experimental-strip-types ./user-facing.test.ts",
+    "prepack": "npm test",
+    "prepublishOnly": "npm test",
+    "pack:check": "npm pack --dry-run"
   },
   "dependencies": {
     "unpdf": "1.6.2",
     "ws": "^8.21.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
