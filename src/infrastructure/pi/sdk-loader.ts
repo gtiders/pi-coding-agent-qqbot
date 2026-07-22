@@ -1,3 +1,4 @@
+import * as hostSdk from "@earendil-works/pi-coding-agent";
 import { access, realpath, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -42,26 +43,12 @@ export async function resolveSdkUrl(options: SdkResolverOptions): Promise<URL> {
 	throw new Error(`Unable to resolve Pi SDK from ${candidates.map((candidate) => candidate.source).join(", ")}`);
 }
 
-// The Pi SDK does not publish one stable aggregate runtime type. Keep the
-// dynamic boundary here and validate the entry points used by this package.
-// biome-ignore lint/suspicious/noExplicitAny: verified dynamic SDK namespace.
-let sdkPromise: Promise<any> | undefined;
-
-// biome-ignore lint/suspicious/noExplicitAny: verified dynamic SDK namespace.
+// Pi supplies this peer from its own module root. A static import is required:
+// resolving from the extension directory can select a second, incompatible SDK.
+// biome-ignore lint/suspicious/noExplicitAny: the host SDK has no stable aggregate runtime type.
 export function loadPiSdk(): Promise<any> {
-	if (!sdkPromise) {
-		const launcher = process.argv[1];
-		const options: SdkResolverOptions = {
-			resolveModule: async (specifier) => import.meta.resolve(specifier),
-			...(launcher ? { launcher } : {}),
-		};
-		sdkPromise = resolveSdkUrl(options).then(async (url) => {
-			const sdk = await import(url.href);
-			for (const key of ["getAgentDir", "SettingsManager", "AgentSessionRuntime", "createAgentSessionServices"]) {
-				if (!(key in sdk)) throw new Error(`Pi SDK is missing required export: ${key}`);
-			}
-			return sdk;
-		});
+	for (const key of ["getAgentDir", "SettingsManager", "AgentSessionRuntime", "createAgentSessionServices"]) {
+		if (!(key in hostSdk)) throw new Error(`Pi SDK is missing required export: ${key}`);
 	}
-	return sdkPromise;
+	return Promise.resolve(hostSdk);
 }

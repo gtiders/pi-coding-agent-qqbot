@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 
-import { resolveSdkUrl } from "../../../src/infrastructure/pi/sdk-loader.ts";
+import { loadPiSdk, resolveSdkUrl } from "../../../src/infrastructure/pi/sdk-loader.ts";
 
 async function withFakeSdk(run: (entry: string, launcher: string) => Promise<void>): Promise<void> {
 	const root = await mkdtemp(join(tmpdir(), "pi-agent-qqbot-sdk-"));
@@ -21,6 +21,13 @@ async function withFakeSdk(run: (entry: string, launcher: string) => Promise<voi
 		await rm(root, { recursive: true, force: true });
 	}
 }
+
+test("loads the SDK from the declared Pi host peer", async () => {
+	const sdk = await loadPiSdk();
+	for (const key of ["getAgentDir", "SettingsManager", "AgentSessionRuntime", "createAgentSessionServices"]) {
+		assert.equal(key in sdk, true, `missing host SDK export: ${key}`);
+	}
+});
 
 test("prefers a packaged host SDK over the extension-local module", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-agent-qqbot-packaged-sdk-"));
