@@ -130,7 +130,8 @@ export class RemoteCommandController {
 			);
 			return;
 		}
-		const selected = await session.setModel(matches[0].provider, matches[0].id);
+		const match = matches[0]!;
+		const selected = await session.setModel(match.provider, match.id);
 		await this.dependencies.reply(
 			message,
 			`## 已切换 QQ 会话模型\n\n- 模型：\`${selected.provider}/${selected.id}\`\n- 输入：${selected.input.join("、")}\n- 思考等级：${session.thinkingLevel()}\n\n继续发送问题即可。`,
@@ -206,11 +207,12 @@ export class RemoteCommandController {
 			});
 		if (!matches.length) throw new Error(`没有找到短 ID 或名称为“${selector}”的 QQ 会话；请重新发送 /sessions`);
 		if (matches.length > 1) throw new Error(`“${selector}”匹配多个 QQ 会话；请使用更完整的短 ID`);
-		if (matches[0].id === session.sessionId()) {
-			await this.dependencies.reply(message, `当前已经是 QQ 会话 \`${shortId(matches[0].id)}\`，无需切换。`);
+		const match = matches[0]!;
+		if (match.id === session.sessionId()) {
+			await this.dependencies.reply(message, `当前已经是 QQ 会话 \`${shortId(match.id)}\`，无需切换。`);
 			return;
 		}
-		const resumed = await session.resumeSession(matches[0].path);
+		const resumed = await session.resumeSession(match.path);
 		const model = session.currentModel();
 		await this.dependencies.reply(
 			message,

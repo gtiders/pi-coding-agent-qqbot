@@ -9,7 +9,7 @@ interface ConversationEntry {
 	key: string;
 	session: QQAgentSession;
 	lastUsedAt: number;
-	initializing?: Promise<void>;
+	initializing?: Promise<void> | undefined;
 }
 
 export class ConversationRegistry {
@@ -38,7 +38,7 @@ export class ConversationRegistry {
 			entry.initializing = (async () => {
 				if (sessionDir) await mkdir(sessionDir, { recursive: true, mode: 0o700 });
 				await entry?.session.init(this.cwd, {
-					sessionDir,
+					...(sessionDir ? { sessionDir } : {}),
 					persistent: this.config.sessions.mode === "persistent",
 					restore: this.config.sessions.restore,
 				});

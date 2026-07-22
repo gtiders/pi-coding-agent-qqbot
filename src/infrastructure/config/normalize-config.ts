@@ -1,8 +1,7 @@
 /** Config loading and strict normalization for pi-agent-qqbot. */
 
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import type { PiAgentQQBotConfig, QQMediaConfig, QQMediaSttConfig, QQOutboundMediaConfig } from "../../application/ports";
 
@@ -92,84 +91,30 @@ export interface LoadConfigResult {
 	parseError?: string;
 }
 
-export async function loadConfig(): Promise<LoadConfigResult> {
-	let text: string;
-	try {
-		text = await readFile(CONFIG_PATH, "utf-8");
-	} catch {
-		return { config: cloneDefaults(), missing: true };
-	}
-
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(text);
-	} catch (err) {
-		return {
-			config: cloneDefaults(),
-			parseError: err instanceof Error ? err.message : String(err),
-		};
-	}
-
-	return { config: normalizeConfig(parsed) };
-}
-
-export async function updateAccessList(
+export function addAccessUser(
+	raw: Record<string, unknown>,
 	userOpenId: string,
 	role: "user" | "admin",
-): Promise<PiAgentQQBotConfig> {
+): Record<string, unknown> {
 	const normalizedOpenId = userOpenId.trim();
 	if (!normalizedOpenId || normalizedOpenId.length > 256 || /[\u0000-\u001f\u007f]/.test(normalizedOpenId)) {
 		throw new Error("invalid QQ user openid");
 	}
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(await readFile(CONFIG_PATH, "utf-8"));
-	} catch (err) {
-		throw new Error(`cannot read pi-agent-qqbot config: ${err instanceof Error ? err.message : String(err)}`);
-	}
-	if (!isRecord(parsed)) throw new Error("pi-agent-qqbot config root must be a JSON object");
-	const next = structuredClone(parsed);
+	const next = structuredClone(raw);
 	next.allowUsers = appendUniqueString(next.allowUsers, normalizedOpenId);
 	const commands = isRecord(next.commands) ? { ...next.commands } : {};
 	if (role === "admin") commands.admins = appendUniqueString(commands.admins, normalizedOpenId);
 	next.commands = commands;
-	const dir = dirname(CONFIG_PATH);
-	await mkdir(dir, { recursive: true, mode: 0o700 });
-	const tempPath = `${CONFIG_PATH}.tmp-${process.pid}-${Date.now()}`;
-	try {
-		await writeFile(tempPath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf-8", mode: 0o600, flag: "wx" });
-		await rename(tempPath, CONFIG_PATH);
-		await chmod(CONFIG_PATH, 0o600);
-	} catch (err) {
-		await import("node:fs/promises").then((fs) => fs.rm(tempPath, { force: true })).catch(() => undefined);
-		throw err;
-	}
-	return normalizeConfig(next);
+	return next;
 }
 
-export async function removeAccessUser(userOpenId: string): Promise<PiAgentQQBotConfig> {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(await readFile(CONFIG_PATH, "utf-8"));
-	} catch (err) {
-		throw new Error(`cannot read pi-agent-qqbot config: ${err instanceof Error ? err.message : String(err)}`);
-	}
-	if (!isRecord(parsed)) throw new Error("pi-agent-qqbot config root must be a JSON object");
-	const next = structuredClone(parsed);
+export function removeAccessUser(raw: Record<string, unknown>, userOpenId: string): Record<string, unknown> {
+	const next = structuredClone(raw);
 	next.allowUsers = stringArray(next.allowUsers).filter((value) => value !== userOpenId);
 	const commands = isRecord(next.commands) ? { ...next.commands } : {};
 	commands.admins = stringArray(commands.admins).filter((value) => value !== userOpenId);
 	next.commands = commands;
-	const tempPath = `${CONFIG_PATH}.tmp-${process.pid}-${Date.now()}`;
-	try {
-		await writeFile(tempPath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf-8", mode: 0o600, flag: "wx" });
-		await rename(tempPath, CONFIG_PATH);
-		await chmod(CONFIG_PATH, 0o600);
-	} catch (err) {
-		await import("node:fs/promises").then((fs) => fs.rm(tempPath, { force: true })).catch(() => undefined);
-		throw err;
-	}
-	return normalizeConfig(next);
+	return next;
 }
 
 export function normalizeConfig(parsed: unknown): PiAgentQQBotConfig {

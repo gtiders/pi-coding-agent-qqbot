@@ -26,7 +26,7 @@ export interface DownloadedAttachment {
 	path: string;
 	bytes: number;
 	media: SniffedMedia;
-	responseContentType?: string;
+	responseContentType?: string | undefined;
 }
 
 export interface AttachmentDownloaderOptions {
@@ -34,7 +34,7 @@ export interface AttachmentDownloaderOptions {
 	messageId: string;
 	timeoutMs: number;
 	signal: AbortSignal;
-	onProgress?: (bytes: number) => void;
+	onProgress?: ((bytes: number) => void) | undefined;
 }
 
 export class AttachmentDownloadError extends Error {
@@ -50,7 +50,7 @@ export class AttachmentDownloader {
 	private readonly workspace: string;
 	private readonly timeoutMs: number;
 	private readonly signal: AbortSignal;
-	private readonly onProgress?: (bytes: number) => void;
+	private readonly onProgress: ((bytes: number) => void) | undefined;
 	private totalBytes = 0;
 
 	constructor(options: AttachmentDownloaderOptions) {
@@ -143,7 +143,7 @@ export class AttachmentDownloader {
 				path: filePath,
 				bytes: info.size,
 				media: sniffMedia(head, headerValue(response, "content-type"), sourceUrl),
-				responseContentType: headerValue(response, "content-type")?.split(";", 1)[0].trim().toLowerCase(),
+				responseContentType: headerValue(response, "content-type")?.split(";", 1)[0]?.trim().toLowerCase(),
 			};
 		} catch (err) {
 			if (filePath) await rm(filePath, { force: true }).catch(() => undefined);
@@ -213,7 +213,10 @@ async function requestPinned(url: URL, signal: AbortSignal): Promise<IncomingMes
 				lookup: (_hostname, options, callback) => {
 					const wantsAll = typeof options === "object" && options !== null && options.all === true;
 					if (wantsAll) callback(null, addresses);
-					else callback(null, addresses[0].address, addresses[0].family);
+					else {
+						const first = addresses[0]!;
+						callback(null, first.address, first.family);
+					}
 				},
 			},
 			(response) => {
@@ -269,12 +272,14 @@ async function resolvePublicHost(hostname: string): Promise<Array<{ address: str
 }
 
 export function isPublicAddress(address: string): boolean {
-	const normalized = address.toLowerCase().split("%")[0];
+	const normalized = address.toLowerCase().split("%")[0] ?? "";
 	const family = isIP(normalized);
 	if (family === 4) {
 		const parts = normalized.split(".").map(Number);
 		if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return false;
-		const [a, b, c] = parts;
+		const a = parts[0]!;
+		const b = parts[1]!;
+		const c = parts[2]!;
 		return !(
 			a === 0 || a === 10 || a === 127 ||
 			(a === 100 && b >= 64 && b <= 127) ||
@@ -317,7 +322,7 @@ export function sniffMedia(head: Uint8Array, contentType?: string | null, source
 	if (b.subarray(0, 4).toString("ascii") === "RIFF" && b.subarray(8, 12).toString("ascii") === "WAVE") {
 		return { kind: "audio", mimeType: "audio/wav", extension: ".wav" };
 	}
-	if (b.subarray(0, 3).toString("ascii") === "ID3" || (b.length >= 2 && b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) {
+	if (b.subarray(0, 3).toString("ascii") === "ID3" || (b.length >= 2 && b[0] === 0xff && (b[1]! & 0xe0) === 0xe0)) {
 		return { kind: "audio", mimeType: "audio/mpeg", extension: ".mp3" };
 	}
 	if (b.subarray(0, 4).toString("ascii") === "OggS") return { kind: "audio", mimeType: "audio/ogg", extension: ".ogg" };
@@ -328,7 +333,7 @@ export function sniffMedia(head: Uint8Array, contentType?: string | null, source
 	if (starts(b, [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07])) return { kind: "archive", mimeType: "application/vnd.rar", extension: ".rar" };
 	if (starts(b, [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c])) return { kind: "archive", mimeType: "application/x-7z-compressed", extension: ".7z" };
 
-	const declared = contentType?.split(";", 1)[0].trim().toLowerCase();
+	const declared = contentType?.split(";", 1)[0]?.trim().toLowerCase();
 	let extension = "";
 	try {
 		extension = extname(new URL(sourceName, "https://placeholder.invalid").pathname).toLowerCase();

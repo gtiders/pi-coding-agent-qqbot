@@ -96,7 +96,8 @@ export function chunkMarkdown(text: string, maxBytes: number, maxChunks: number)
 
 	const representedBytes = chunks.reduce((total, chunk) => total + utf8Bytes(chunk), 0);
 	if (representedBytes < utf8Bytes(text) && chunks.length) {
-		chunks[chunks.length - 1] = appendWithinBudget(chunks[chunks.length - 1], "\n\n> ⚠️ 回复过长，后续内容已省略。", maxBytes);
+		const lastIndex = chunks.length - 1;
+		chunks[lastIndex] = appendWithinBudget(chunks[lastIndex]!, "\n\n> ⚠️ 回复过长，后续内容已省略。", maxBytes);
 	}
 	return chunks.slice(0, maxChunks);
 }
@@ -112,7 +113,8 @@ export function chunkPlainText(text: string, maxBytes: number, maxChunks: number
 		else chunks.push(piece);
 	}
 	if (chunks.reduce((total, chunk) => total + utf8Bytes(chunk), 0) < utf8Bytes(text) && chunks.length) {
-		chunks[chunks.length - 1] = appendWithinBudget(chunks[chunks.length - 1], "\n\n⚠️ 回复过长，后续内容已省略。", maxBytes);
+		const lastIndex = chunks.length - 1;
+		chunks[lastIndex] = appendWithinBudget(chunks[lastIndex]!, "\n\n⚠️ 回复过长，后续内容已省略。", maxBytes);
 	}
 	return chunks;
 }
@@ -144,28 +146,28 @@ function convertMarkdownTables(text: string): string {
 	const output: string[] = [];
 	let inFence = false;
 	for (let index = 0; index < lines.length; index++) {
-		const line = lines[index];
+		const line = lines[index]!;
 		if (/^```/.test(line.trimStart())) {
 			inFence = !inFence;
 			output.push(line);
 			continue;
 		}
-		if (!inFence && index + 1 < lines.length && isTableRow(line) && isTableDelimiter(lines[index + 1])) {
+		if (!inFence && index + 1 < lines.length && isTableRow(line) && isTableDelimiter(lines[index + 1]!)) {
 			const headers = parseTableRow(line);
 			const rows: string[][] = [];
 			let rowIndex = index + 2;
-			while (rowIndex < lines.length && isTableRow(lines[rowIndex]) && lines[rowIndex].trim()) {
-				rows.push(parseTableRow(lines[rowIndex]));
+			while (rowIndex < lines.length && isTableRow(lines[rowIndex]!) && lines[rowIndex]!.trim()) {
+				rows.push(parseTableRow(lines[rowIndex]!));
 				rowIndex++;
 			}
 			index = rowIndex - 1;
 			if (headers.length >= 2 && rows.length) {
 				for (const row of rows) {
 					const first = row[0] ?? "";
-					output.push(`- **${escapeMarkdownLabel(headers[0])}：**${first}`);
+					output.push(`- **${escapeMarkdownLabel(headers[0]!)}：**${first}`);
 					for (let column = 1; column < headers.length; column++) {
 						const value = row[column] ?? "";
-						if (value) output.push(`  - **${escapeMarkdownLabel(headers[column])}：**${value}`);
+						if (value) output.push(`  - **${escapeMarkdownLabel(headers[column]!)}：**${value}`);
 					}
 				}
 				continue;
@@ -197,13 +199,13 @@ function escapeMarkdownLabel(value: string): string {
 function attachHeadings(blocks: string[]): string[] {
 	const result: string[] = [];
 	for (let index = 0; index < blocks.length; index++) {
-		const block = blocks[index];
+		const block = blocks[index]!;
 		if (
 			/^#{1,6}\s+/.test(block) &&
 			index + 1 < blocks.length &&
-			!blocks[index + 1].startsWith("```")
+			!blocks[index + 1]!.startsWith("```")
 		) {
-			result.push(`${block}\n\n${blocks[++index]}`);
+			result.push(`${block}\n\n${blocks[++index]!}`);
 		} else result.push(block);
 	}
 	return result;
@@ -314,13 +316,13 @@ function semanticUnits(text: string): string[] {
 	let start = 0;
 	let rangeIndex = 0;
 	for (let index = 0; index < text.length; index++) {
-		while (rangeIndex < protectedRanges.length && protectedRanges[rangeIndex][1] <= index) rangeIndex++;
+		while ((protectedRanges[rangeIndex]?.[1] ?? Number.POSITIVE_INFINITY) <= index) rangeIndex++;
 		const range = protectedRanges[rangeIndex];
 		if (range && index >= range[0] && index < range[1]) {
 			index = range[1] - 1;
 			continue;
 		}
-		const char = text[index];
+		const char = text[index]!;
 		if (char === "\n" || /[。！？!?；;]/u.test(char)) {
 			const unit = text.slice(start, index + 1).trim();
 			if (unit) units.push(unit);

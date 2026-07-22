@@ -20,9 +20,9 @@ export class QQAuth {
 	private readonly appId: string;
 	private readonly clientSecret: string;
 
-	private token?: string;
+	private token: string | undefined;
 	private expiresAt = 0; // epoch ms
-	private inflight?: Promise<string>;
+	private inflight: Promise<string> | undefined;
 
 	constructor(appId: string, clientSecret: string) {
 		this.appId = appId;

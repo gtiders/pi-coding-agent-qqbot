@@ -22,7 +22,7 @@ export interface AgentQQBotHostDiagnostics {
 	buildId: string;
 	schema: number;
 	createdAt: number;
-	runtimeStartedAt?: number;
+	runtimeStartedAt?: number | undefined;
 	ownerCount: number;
 	runtimeReady: boolean;
 	restoreRuntime: boolean;
@@ -35,17 +35,17 @@ export class AgentQQBotHost {
 	readonly createdAt = Date.now();
 	private config: PiAgentQQBotConfig;
 	private configFingerprint: string;
-	private runtime?: PiAgentQQBotRuntime;
-	private runtimeStartedAt?: number;
-	private startPromise?: Promise<boolean>;
-	private stopPromise?: Promise<void>;
-	private stopTimer?: ReturnType<typeof setTimeout>;
+	private runtime: PiAgentQQBotRuntime | undefined;
+	private runtimeStartedAt: number | undefined;
+	private startPromise: Promise<boolean> | undefined;
+	private stopPromise: Promise<void> | undefined;
+	private stopTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly owners = new Set<symbol>();
 
 	constructor(
 		config: PiAgentQQBotConfig,
 		private readonly restoreRuntime: boolean,
-		private readonly replacedHost?: string,
+		private readonly replacedHost?: string | undefined,
 	) {
 		this.config = config;
 		this.configFingerprint = fingerprint(config);

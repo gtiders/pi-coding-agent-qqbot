@@ -23,3 +23,9 @@ test("enforces domain and application import direction", async () => {
 		assert.doesNotMatch(source, /from ["'][^"']*(?:infrastructure|presentation)/, path);
 	}
 });
+
+test("routes outbound local files through the verified platform API", async () => {
+	const source = await readFile(resolve("src", "infrastructure", "media", "outbound-media.ts"), "utf8");
+	assert.match(source, /openVerifiedLocalFile/);
+	assert.doesNotMatch(source, /open\(path, constants\.O_RDONLY/);
+});

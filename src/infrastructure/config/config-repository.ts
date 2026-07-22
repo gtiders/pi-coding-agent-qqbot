@@ -28,8 +28,13 @@ export class FileConfigRepository {
 			throw new ConfigRepositoryError("invalid_path", "Cannot read config", error);
 		}
 		try {
-			return { config: normalizeConfig(JSON.parse(text)) };
+			const parsed = JSON.parse(text) as unknown;
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+				throw new ConfigRepositoryError("invalid_json", "Config root must be an object");
+			}
+			return { config: normalizeConfig(parsed) };
 		} catch (error) {
+			if (error instanceof ConfigRepositoryError) throw error;
 			throw new ConfigRepositoryError("invalid_json", "Config is not valid JSON", error);
 		}
 	}

@@ -47,6 +47,8 @@ Copy-Item .\pi-agent-qqbot.json.example "$HOME\.pi\agent\pi-agent-qqbot.json"
 
 填写 QQ Bot `appId` 和 `clientSecret`，将 `enabled` 改为 `true`，并配置 `allowUsers` / `allowGroups`。真实配置和密钥不能提交到 Git。
 
+从旧版本升级时，先完整退出所有 Pi 进程，再将此前的配置文件手动重命名为上面的唯一文件名。若目标文件已经存在，停止操作并人工合并，禁止覆盖。扩展不会探测或迁移旧文件名。
+
 ### 命令
 
 本地 Pi 命令保持不变：`/qqbot-start`、`/qqbot-stop`、`/qqbot-status`、`/qqbot-runtime`、`/qqbot-reconnect`、`/qqbot-last`、`/qqbot-requests`、`/qqbot-approve`、`/qqbot-deny`、`/qqbot-revoke`。
@@ -71,6 +73,8 @@ This package is not published to npm yet. Run `npm install`, then install the ch
 ### Configure
 
 Copy `pi-agent-qqbot.json.example` to `~/.pi/agent/pi-agent-qqbot.json` on macOS/Linux, or `%USERPROFILE%\.pi\agent\pi-agent-qqbot.json` on Windows. Set QQ credentials, enable the extension, and configure allowlists. Never commit the real config or secrets.
+
+When upgrading, fully exit every Pi process before manually renaming the previous config to this sole filename. Stop and merge manually if the destination already exists; never overwrite it. The extension does not probe or migrate earlier filenames.
 
 ### Platform And Security
 

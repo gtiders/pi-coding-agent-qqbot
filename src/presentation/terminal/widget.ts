@@ -16,17 +16,17 @@ interface ViewLine {
 	kind: "inbound" | "queue" | "attachment" | "outbound" | "run" | "assistant" | "tool" | "reply" | "error";
 	text: string;
 	at: number;
-	messageId?: string;
-	toolCallId?: string;
-	state?: "running" | "success" | "error";
+	messageId?: string | undefined;
+	toolCallId?: string | undefined;
+	state?: "running" | "success" | "error" | undefined;
 }
 
 interface RuntimeStatus {
 	connection: ConnectionState;
-	detail?: string;
+	detail?: string | undefined;
 	queueSize: number;
 	running: boolean;
-	activeLabel?: string;
+	activeLabel?: string | undefined;
 }
 
 /**
@@ -43,9 +43,9 @@ export class TerminalConversationView implements QQConversationObserver {
 		queueSize: 0,
 		running: false,
 	};
-	private tui?: TUI;
-	private component?: Component;
-	private renderTimer?: ReturnType<typeof setTimeout>;
+	private tui: TUI | undefined;
+	private component: Component | undefined;
+	private renderTimer: ReturnType<typeof setTimeout> | undefined;
 	private disposed = false;
 
 	constructor(ctx: ExtensionContext) {
@@ -313,7 +313,8 @@ export class TerminalConversationView implements QQConversationObserver {
 
 	private findTool(toolCallId: string): ViewLine | undefined {
 		for (let i = this.lines.length - 1; i >= 0; i--) {
-			if (this.lines[i].toolCallId === toolCallId) return this.lines[i];
+			const line = this.lines[i];
+			if (line?.toolCallId === toolCallId) return line;
 		}
 		return undefined;
 	}
@@ -325,7 +326,7 @@ export class TerminalConversationView implements QQConversationObserver {
 	): ViewLine | undefined {
 		for (let i = this.lines.length - 1; i >= 0; i--) {
 			const line = this.lines[i];
-			if (line.kind !== kind) continue;
+			if (!line || line.kind !== kind) continue;
 			if (messageId !== undefined && line.messageId !== messageId) continue;
 			if (state !== undefined && line.state !== state) continue;
 			return line;
@@ -392,9 +393,9 @@ export class TerminalConversationView implements QQConversationObserver {
 class ConversationWidget implements Component {
 	private readonly view: TerminalConversationView;
 	private readonly theme: Theme;
-	private cachedWidth?: number;
-	private cachedSignature?: string;
-	private cachedLines?: string[];
+	private cachedWidth: number | undefined;
+	private cachedSignature: string | undefined;
+	private cachedLines: string[] | undefined;
 
 	constructor(view: TerminalConversationView, theme: Theme) {
 		this.view = view;

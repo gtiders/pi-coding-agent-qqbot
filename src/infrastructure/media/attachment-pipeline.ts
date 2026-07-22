@@ -59,7 +59,7 @@ export class AttachmentPipeline {
 		try {
 			if (!media.enabled) {
 				for (let index = 0; index < msg.attachments.length; index++) {
-					const resource = unsupported(msg.attachments[index], "附件处理已关闭", "media_disabled");
+					const resource = unsupported(msg.attachments[index]!, "附件处理已关闭", "media_disabled");
 					resources.push(resource);
 					fragments.push(failureFragment(resource));
 					callbacks.onEnd?.(index + 1, msg.attachments.length, resource);
@@ -69,7 +69,7 @@ export class AttachmentPipeline {
 
 			for (let index = 0; index < accepted.length; index++) {
 				if (signal.aborted) throw signal.reason;
-				const attachment = accepted[index];
+				const attachment = accepted[index]!;
 				activeIndex = index + 1;
 				activeKind = classifyAttachment(attachment);
 				activeFilename = safeOriginalFilename(attachment.filename);

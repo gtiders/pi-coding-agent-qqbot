@@ -1,9 +1,13 @@
-import { constants } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 
 import { QQApi, QQApiError } from "../qq/api";
+import {
+	LocalFileError,
+	openVerifiedLocalFile,
+	type OpenedLocalFile,
+} from "../platform/opened-file-identity";
 import type {
 	PiAgentQQBotConfig,
 	QQInboundMessage,
@@ -23,8 +27,8 @@ export interface QQOutboundDeliveryOptions {
 	cwd: string;
 	message: QQInboundMessage;
 	target: QQReplyTarget;
-	api?: QQApi;
-	signal?: AbortSignal;
+	api?: QQApi | undefined;
+	signal?: AbortSignal | undefined;
 	fake: boolean;
 	hasMessageSequenceCapacity(): boolean;
 	reserveMessageSequence(): number | undefined;
@@ -60,7 +64,7 @@ export class QQOutboundDeliveryContext {
 	}
 
 	async sendLocalFile(inputPath: string, requestedKind: QQOutboundKind = "auto"): Promise<QQOutboundDeliveryRecord> {
-		let opened: Awaited<ReturnType<typeof open>> | undefined;
+		let opened: OpenedLocalFile | undefined;
 		let filename = safeFilename(inputPath);
 		let bytes = 0;
 		let mediaKind: "image" | "file" = requestedKind === "image" ? "image" : "file";
@@ -76,20 +80,21 @@ export class QQOutboundDeliveryContext {
 				throw new QQOutboundMediaError("reply_budget_exhausted", "QQ 被动回复配额不足，无法发送媒体");
 			}
 
-			const path = await resolveAllowedLocalFile(inputPath, this.options.cwd, this.options.config.outboundMedia.allowedRoots);
-			filename = safeFilename(path);
-			opened = await open(path, constants.O_RDONLY | noFollowFlag());
-			const pinnedPath = await realpath(`/proc/self/fd/${opened.fd}`).catch(() => realpath(path));
-			if (pinnedPath !== path) throw new QQOutboundMediaError("file_changed", "文件路径在打开过程中发生变化，请重试");
-			const before = await opened.stat();
-			if (!before.isFile()) throw new QQOutboundMediaError("not_regular_file", "目标不是普通文件");
-			if (before.nlink > 1) throw new QQOutboundMediaError("hardlink_not_allowed", "为避免越权读取，不允许发送硬链接文件");
-			bytes = before.size;
-			if (bytes <= 0) throw new QQOutboundMediaError("empty_file", "QQ 富媒体不支持空文件");
-
-			const header = Buffer.alloc(Math.min(16, bytes));
-			await opened.read(header, 0, header.length, 0);
-			const detectedImage = detectImage(header);
+			const candidate = normalizeInputPath(inputPath, this.options.cwd);
+			opened = await openVerifiedLocalFile({
+				candidate,
+				allowedRoots: [tmpdir(), ...this.options.config.outboundMedia.allowedRoots],
+				...(this.options.signal ? { signal: this.options.signal } : {}),
+			});
+			filename = safeFilename(opened.path);
+			bytes = opened.size;
+			const absoluteMaxBytes = Math.max(
+				this.options.config.outboundMedia.maxImageBytes,
+				this.options.config.outboundMedia.maxFileBytes,
+			);
+			if (bytes > absoluteMaxBytes) throw new QQOutboundMediaError("file_too_large", `文件超过 ${formatBytes(absoluteMaxBytes)} 限制`);
+			const fileBytes = await opened.read();
+			const detectedImage = detectImage(fileBytes.subarray(0, 16));
 			if (requestedKind === "image" && !detectedImage) {
 				throw new QQOutboundMediaError("unsupported_media_type", "图片必须是有效的 PNG 或 JPEG 文件");
 			}
@@ -110,11 +115,7 @@ export class QQOutboundDeliveryContext {
 
 			this.emit("start", { filename, kind: mediaKind, bytes, status: "failed" });
 			if (!this.options.api) throw new QQOutboundMediaError("qq_api_unavailable", "QQ API 尚未就绪");
-			const fileData = (await opened.readFile()).toString("base64");
-			const after = await opened.stat();
-			if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
-				throw new QQOutboundMediaError("file_changed", "文件在读取过程中发生变化，请重试");
-			}
+			const fileData = fileBytes.toString("base64");
 			this.assertAvailable();
 			phase = "upload";
 			const uploaded = await this.options.api.uploadMedia(
@@ -147,6 +148,12 @@ export class QQOutboundDeliveryContext {
 			this.emit("sent", record);
 			return record;
 		} catch (err) {
+			if (err instanceof LocalFileError) {
+				const mapped = new QQOutboundMediaError(err.code, localFileMessage(err.code));
+				const record = this.failureRecord(filename, mediaKind, bytes, mapped.code, mapped.message);
+				this.emit("failed", record);
+				throw mapped;
+			}
 			if (err instanceof QQOutboundMediaError) {
 				if (!this.recordsValue.some((record) => record.filename === filename && record.errorCode === err.code)) {
 					const record = this.failureRecord(filename, mediaKind, bytes, err.code, err.message);
@@ -254,8 +261,18 @@ function detectImage(header: Buffer): "png" | "jpeg" | undefined {
 	return undefined;
 }
 
-function noFollowFlag(): number {
-	return typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+function localFileMessage(code: LocalFileError["code"]): string {
+	const messages: Record<LocalFileError["code"], string> = {
+		file_not_found: "本地文件不存在",
+		path_invalid: "本地文件路径无效",
+		path_outside_allowed_roots: "文件不在允许发送的目录中",
+		not_regular_file: "目标不是普通文件",
+		hardlink_not_allowed: "为避免越权读取，不允许发送硬链接文件",
+		empty_file: "QQ 富媒体不支持空文件",
+		file_changed: "文件在读取过程中发生变化，请重试",
+		operation_aborted: "当前 QQ 回合已经被停止",
+	};
+	return messages[code];
 }
 
 function safeFilename(path: string): string {

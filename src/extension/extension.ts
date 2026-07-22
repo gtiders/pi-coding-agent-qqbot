@@ -9,7 +9,8 @@
 
 import type { ExtensionAPI, ExtensionContext, SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
 
-import { loadConfig, removeAccessUser, updateAccessList, validateEnabled } from "../infrastructure/config/normalize-config";
+import { FileConfigRepository, ConfigRepositoryError } from "../infrastructure/config/config-repository";
+import { addAccessUser, CONFIG_PATH, removeAccessUser, validateEnabled } from "../infrastructure/config/normalize-config";
 import { acquireAgentQQBotHost, type AgentQQBotHost } from "./lifecycle";
 import { TerminalConversationView } from "../presentation/terminal/widget";
 import { normalizeAccessRole } from "../application/access-requests";
@@ -21,6 +22,7 @@ let host: AgentQQBotHost | undefined;
 let terminalView: TerminalConversationView | undefined;
 let ownerAttached = false;
 let debugCommandRegistered = false;
+const configRepository = new FileConfigRepository(CONFIG_PATH);
 
 export default function (pi: ExtensionAPI) {
 	const runtime = () => host?.getRuntime();
@@ -243,7 +245,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			const confirmed = await ctx.ui.confirm("移除 QQ 权限？", `用户 ${openid}\n将同时移出普通用户和管理员白名单。`);
 			if (!confirmed) return;
-			const config = await removeAccessUser(openid);
+			const config = await configRepository.mutate((raw) => removeAccessUser(raw, openid));
 			currentConfig = config;
 			host?.applyAccessConfig(config);
 			ctx.ui.notify(`已移除 QQ 用户权限：${maskOpenId(openid)}`, "info");
@@ -263,7 +265,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		// Persist first. If writing fails, the request remains pending and the
 		// running allowlist is unchanged.
-		const config = await updateAccessList(pending.userOpenId, role);
+		const config = await configRepository.mutate((raw) => addAccessUser(raw, pending.userOpenId, role));
 		const request = rt.approveAccessRequest(code);
 		if (!request) {
 			ctx.ui.notify("配置已写入，但申请状态已经变化；请检查 /qqbot-status", "warning");
@@ -279,12 +281,17 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
-		const { config, missing, parseError } = await loadConfig();
-		currentConfig = config;
-		if (parseError) {
-			if (ctx.hasUI) ctx.ui.notify(`pi-agent-qqbot: invalid config (${parseError})`, "warning");
+		let loaded;
+		try {
+			loaded = await configRepository.load();
+		} catch (error) {
+			currentConfig = undefined;
+			const code = error instanceof ConfigRepositoryError ? error.code : "read_failed";
+			if (ctx.hasUI) ctx.ui.notify(`pi-agent-qqbot: invalid config (${code})`, "warning");
 			return;
 		}
+		const { config, missing } = loaded;
+		currentConfig = config;
 		if (!config.enabled) {
 			if (missing && ctx.hasUI) ctx.ui.notify("pi-agent-qqbot: no config found (~/.pi/agent/pi-agent-qqbot.json); disabled", "info");
 			return;

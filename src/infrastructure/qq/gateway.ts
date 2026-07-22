@@ -54,11 +54,11 @@ export class QQGateway {
 	private readonly base: string;
 	private readonly cb: QQGatewayCallbacks;
 
-	private ws?: WebSocket;
-	private heartbeatTimer?: ReturnType<typeof setInterval>;
-	private reconnectTimer?: ReturnType<typeof setTimeout>;
+	private ws: WebSocket | undefined;
+	private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+	private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 	private lastSeq: number | null = null;
-	private sessionId?: string;
+	private sessionId: string | undefined;
 	private backoffMs = 1000;
 	private reconnectAttempts = 0;
 	private closing = false;

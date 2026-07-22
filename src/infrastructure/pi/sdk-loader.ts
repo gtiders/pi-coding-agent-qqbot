@@ -9,7 +9,7 @@ export interface SdkResolverOptions {
 }
 
 export async function resolveSdkUrl(options: SdkResolverOptions): Promise<URL> {
-	const candidates: Array<{ source: string; value?: string }> = [
+	const candidates: Array<{ source: string; value?: string | undefined }> = [
 		{ source: "explicit", value: options.explicit?.protocol === "file:" ? options.explicit.pathname : options.explicit?.href },
 	];
 	try {
@@ -35,4 +35,28 @@ export async function resolveSdkUrl(options: SdkResolverOptions): Promise<URL> {
 		}
 	}
 	throw new Error(`Unable to resolve Pi SDK from ${candidates.map((candidate) => candidate.source).join(", ")}`);
+}
+
+// The Pi SDK does not publish one stable aggregate runtime type. Keep the
+// dynamic boundary here and validate the entry points used by this package.
+// biome-ignore lint/suspicious/noExplicitAny: verified dynamic SDK namespace.
+let sdkPromise: Promise<any> | undefined;
+
+// biome-ignore lint/suspicious/noExplicitAny: verified dynamic SDK namespace.
+export function loadPiSdk(): Promise<any> {
+	if (!sdkPromise) {
+		const launcher = process.argv[1];
+		const options: SdkResolverOptions = {
+			resolveModule: async (specifier) => import.meta.resolve(specifier),
+			...(launcher ? { launcher } : {}),
+		};
+		sdkPromise = resolveSdkUrl(options).then(async (url) => {
+			const sdk = await import(url.href);
+			for (const key of ["getAgentDir", "SettingsManager", "AgentSessionRuntime", "createAgentSessionServices"]) {
+				if (!(key in sdk)) throw new Error(`Pi SDK is missing required export: ${key}`);
+			}
+			return sdk;
+		});
+	}
+	return sdkPromise;
 }

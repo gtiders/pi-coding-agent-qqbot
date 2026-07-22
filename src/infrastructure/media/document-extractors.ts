@@ -73,8 +73,8 @@ function decodeUtf16(bytes: Uint8Array, littleEndian: boolean): string {
 	const even = bytes.length - (bytes.length % 2);
 	const swapped = Buffer.alloc(even);
 	for (let i = 0; i < even; i += 2) {
-		swapped[i] = littleEndian ? bytes[i] : bytes[i + 1];
-		swapped[i + 1] = littleEndian ? bytes[i + 1] : bytes[i];
+		swapped[i] = littleEndian ? bytes[i]! : bytes[i + 1]!;
+		swapped[i + 1] = littleEndian ? bytes[i + 1]! : bytes[i]!;
 	}
 	return new TextDecoder("utf-16le", { fatal: true }).decode(swapped);
 }

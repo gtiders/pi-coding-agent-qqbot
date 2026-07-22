@@ -16,7 +16,7 @@ export interface QQApiOptions {
 
 export class QQApiError extends Error {
 	readonly status: number;
-	readonly code?: number;
+	readonly code: number | undefined;
 	readonly requestAccepted: boolean;
 	constructor(message: string, status: number, code?: number, requestAccepted = false) {
 		super(message);

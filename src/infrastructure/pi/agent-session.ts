@@ -13,14 +13,13 @@
  * again after load, so the isolated runtime never re-enters this extension.
  */
 
-import { realpathSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 import { Type } from "typebox";
 
 import type { QQOutboundDeliveryContext } from "../media/outbound-media";
 import { formatBytes } from "../media/outbound-media";
 import { extractFinalAssistantText } from "../../presentation/qq/user-facing-errors";
 import type { QQImageContent } from "../../application/ports";
+import { loadPiSdk } from "./sdk-loader";
 
 export interface QQToolCall {
 	toolCallId: string;
@@ -62,41 +61,12 @@ export type QQAgentRunEvent =
 
 export type QQAgentRunObserver = (event: QQAgentRunEvent) => void;
 
-// Split so the literal never appears verbatim in the bundle path scan target.
-const SDK_MARKER = "@earendil-works" + "/" + "pi-coding-agent";
-
-/** Locate the installed pi SDK entry (dist/index.js) from the running process. */
-export function resolveSdkEntry(): string {
-	const candidates: string[] = [];
-	if (process.argv[1]) {
-		try {
-			candidates.push(realpathSync(process.argv[1]));
-		} catch {
-			// ignore; fall back to the raw path
-		}
-		candidates.push(process.argv[1]);
-	}
-	for (const candidate of candidates) {
-		const normalized = candidate.replaceAll("\\", "/");
-		const index = normalized.lastIndexOf(SDK_MARKER);
-		if (index >= 0) return `${normalized.slice(0, index + SDK_MARKER.length)}/dist/index.js`;
-	}
-	throw new Error("cannot locate pi SDK from process.argv[1]");
-}
-
-// biome-ignore lint/suspicious/noExplicitAny: SDK is imported dynamically by path.
-let sdkPromise: Promise<any> | undefined;
-// biome-ignore lint/suspicious/noExplicitAny: SDK is imported dynamically by path.
-function loadSdk(): Promise<any> {
-	if (!sdkPromise) sdkPromise = import(pathToFileURL(resolveSdkEntry()).href);
-	return sdkPromise;
-}
 
 export async function loadResizeImage(): Promise<(
 	inputBytes: Uint8Array,
 	mimeType: string,
 ) => Promise<{ data: string; mimeType: string } | null>> {
-	const sdk = await loadSdk();
+	const sdk = await loadPiSdk();
 	return sdk.resizeImage;
 }
 
@@ -104,11 +74,11 @@ export class QQAgentSession {
 	// biome-ignore lint/suspicious/noExplicitAny: runtime typing comes from the dynamic SDK.
 	private runtime: any;
 	private cwd = "";
-	private sessionDir?: string;
+	private sessionDir: string | undefined;
 	private persistent = true;
 	private restore: "recent" | "new" = "recent";
 	private disposed = false;
-	private outboundDelivery?: QQOutboundDeliveryContext;
+	private outboundDelivery: QQOutboundDeliveryContext | undefined;
 
 	/** Create the isolated runtime. Throws if the SDK/model cannot be loaded. */
 	async init(
@@ -120,7 +90,7 @@ export class QQAgentSession {
 		this.sessionDir = options.sessionDir;
 		this.persistent = options.persistent !== false;
 		this.restore = options.restore ?? "recent";
-		const sdk = await loadSdk();
+		const sdk = await loadPiSdk();
 		const sessionManager = this.createInitialSessionManager(sdk);
 		const createRuntime = async ({
 			cwd: runtimeCwd,
@@ -238,7 +208,8 @@ export class QQAgentSession {
 				const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
 				const toolName = typeof event.toolName === "string" ? event.toolName : "tool";
 				const index = toolIndexes.get(toolCallId);
-				if (index !== undefined) tools[index].isError = !!event.isError;
+				const tool = index === undefined ? undefined : tools[index];
+				if (tool) tool.isError = !!event.isError;
 				emit({ kind: "tool_end", toolCallId, toolName, isError: !!event.isError });
 			} else if (event?.type === "agent_end") {
 				if (Array.isArray(event.messages)) messages = event.messages;
@@ -300,7 +271,7 @@ export class QQAgentSession {
 
 	async listSessions(): Promise<QQSessionInfo[]> {
 		if (!this.persistent || !this.sessionDir) return [];
-		const sdk = await loadSdk();
+		const sdk = await loadPiSdk();
 		const sessions = await sdk.SessionManager.list(this.cwd, this.sessionDir);
 		return sessions as QQSessionInfo[];
 	}
@@ -312,7 +283,8 @@ export class QQAgentSession {
 		if (!target) throw new Error("目标 QQ 会话不存在或不属于当前对话");
 		const result = await this.requireRuntime().switchSession(target.path);
 		if (result.cancelled) throw new Error("恢复 QQ 会话已取消");
-		return { id: this.sessionId(), ...(this.sessionName() ? { name: this.sessionName() } : {}) };
+		const name = this.sessionName();
+		return { id: this.sessionId(), ...(name ? { name } : {}) };
 	}
 
 	setSessionName(name: string): string {

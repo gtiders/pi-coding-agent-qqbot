@@ -14,7 +14,6 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
-import { pathToFileURL } from "node:url";
 
 import { AgentTurnController } from "./agent-turn-controller";
 import { RemoteCommandController } from "./remote-command-controller";
@@ -27,7 +26,7 @@ import { maskAppId } from "../infrastructure/config/normalize-config";
 import { QQApi, QQApiError } from "../infrastructure/qq/api";
 import { QQAuth } from "../infrastructure/qq/auth";
 import { QQGateway } from "../infrastructure/qq/gateway";
-import { resolveSdkEntry } from "../infrastructure/pi/agent-session";
+import { loadPiSdk } from "../infrastructure/pi/sdk-loader";
 import { MessageQueue } from "../application/message-queue";
 import { MessageDedupe } from "../domain/message-dedupe.ts";
 import { ReplyBudget, ReplyBudgetPool } from "../domain/reply-budget.ts";
@@ -48,7 +47,7 @@ const MAX_RETAINED_REPLY_BUDGETS = 256;
 interface InboundSummary {
 	type: "private" | "group";
 	user: string;
-	group?: string;
+	group?: string | undefined;
 	text: string;
 	attachments: string[];
 	at: number;
@@ -58,7 +57,7 @@ interface InboundSummary {
 interface OutboundSummary {
 	type: "private" | "group";
 	user: string;
-	group?: string;
+	group?: string | undefined;
 	text: string;
 	at: number;
 	fake?: boolean;
@@ -67,39 +66,39 @@ interface OutboundSummary {
 export class PiAgentQQBotRuntime {
 	private config: PiAgentQQBotConfig;
 
-	private auth?: QQAuth;
-	private gateway?: QQGateway;
-	private api?: QQApi;
+	private auth: QQAuth | undefined;
+	private gateway: QQGateway | undefined;
+	private api: QQApi | undefined;
 	private readonly queue: MessageQueue;
 	private readonly attachmentPipeline: AttachmentPipeline;
 	private readonly seenMessages = new MessageDedupe(2 * 60 * 60 * 1000, 2000, { now: () => Date.now() });
 	private readonly accessRequests = new QQAccessRequestStore();
 	private readonly commands: RemoteCommandController;
 	private readonly agentTurns: AgentTurnController;
-	private conversations?: ConversationRegistry;
+	private conversations: ConversationRegistry | undefined;
 	private runtimeAbort = new AbortController();
-	private activeRunAbort?: AbortController;
+	private activeRunAbort: AbortController | undefined;
 	private agentCwd = process.cwd();
 
-	private ctx?: ExtensionContext;
+	private ctx: ExtensionContext | undefined;
 	private running = false;
-	private activeTarget?: QQReplyTarget;
+	private activeTarget: QQReplyTarget | undefined;
 	private activeFake = false;
 
 	private state: ConnectionState = "disconnected";
-	private stateDetail?: string;
-	private lastError?: string;
-	private lastAttachmentError?: string;
-	private activeAttachmentStatus?: string;
-	private lastOutboundMediaError?: string;
-	private activeOutboundMediaStatus?: string;
-	private lastInbound?: InboundSummary;
-	private lastOutbound?: OutboundSummary;
+	private stateDetail: string | undefined;
+	private lastError: string | undefined;
+	private lastAttachmentError: string | undefined;
+	private activeAttachmentStatus: string | undefined;
+	private lastOutboundMediaError: string | undefined;
+	private activeOutboundMediaStatus: string | undefined;
+	private lastInbound: InboundSummary | undefined;
+	private lastOutbound: OutboundSummary | undefined;
 
 	private pumpScheduled = false;
-	private pumpTimer?: ReturnType<typeof setTimeout>;
+	private pumpTimer: ReturnType<typeof setTimeout> | undefined;
 	private fakeCounter = 0;
-	private observer?: QQConversationObserver;
+	private observer: QQConversationObserver | undefined;
 	/** One bounded passive-reply budget owns every reservation for an inbound message. */
 	private readonly replyBudgets = new ReplyBudgetPool(QQ_MAX_REPLY_CHUNKS, MAX_RETAINED_REPLY_BUDGETS);
 
@@ -223,7 +222,7 @@ export class PiAgentQQBotRuntime {
 
 		// Conversation runtimes are created lazily after allowlist admission. This
 		// keeps startup fast while preserving strict isolation from the local TUI.
-		const sdk = await import(pathToFileURL(resolveSdkEntry()).href);
+		const sdk = await loadPiSdk();
 		this.conversations = new ConversationRegistry(this.config, sdk.getAgentDir(), ctx.cwd);
 
 		this.auth = new QQAuth(this.config.appId, this.config.clientSecret);

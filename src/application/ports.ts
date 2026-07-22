@@ -99,17 +99,17 @@ export interface PiAgentQQBotConfig {
 	enabled: boolean;
 	appId: string;
 	clientSecret: string;
-	sandbox?: boolean;
-	allowUsers?: string[];
-	allowGroups?: string[];
-	replyPrefix?: string;
-	maxQueueSize?: number;
-	sendBusyNotice?: boolean;
+	sandbox?: boolean | undefined;
+	allowUsers?: string[] | undefined;
+	allowGroups?: string[] | undefined;
+	replyPrefix?: string | undefined;
+	maxQueueSize?: number | undefined;
+	sendBusyNotice?: boolean | undefined;
 	commands: QQCommandConfig;
 	sessions: QQSessionConfig;
 	startup: QQStartupConfig;
 	/** Include a compact execution summary after the final answer. */
-	showProcess?: boolean;
+	showProcess?: boolean | undefined;
 	/** Prefer native QQ Markdown with a safe plain-text fallback, or force plain text. */
 	replyFormat: QQReplyFormat;
 	/** Slow-task progress ack inside the passive-reply budget. */
@@ -117,18 +117,18 @@ export interface PiAgentQQBotConfig {
 	/** Local computer -> current QQ conversation rich-media delivery policy. */
 	outboundMedia: QQOutboundMediaConfig;
 	media: QQMediaConfig;
-	debug?: boolean;
+	debug?: boolean | undefined;
 }
 
 export interface QQAttachment {
 	contentType: string;
 	filename: string;
-	size?: number;
-	width?: number;
-	height?: number;
-	url?: string;
-	voiceWavUrl?: string;
-	asrReferText?: string;
+	size?: number | undefined;
+	width?: number | undefined;
+	height?: number | undefined;
+	url?: string | undefined;
+	voiceWavUrl?: string | undefined;
+	asrReferText?: string | undefined;
 }
 
 /** A normalized inbound QQ message. */
@@ -137,12 +137,12 @@ export interface QQInboundMessage {
 	type: "private" | "group";
 	text: string;
 	userOpenId: string; // user_openid (private) or member_openid (group)
-	groupOpenId?: string;
+	groupOpenId?: string | undefined;
 	attachments: QQAttachment[];
 	raw: unknown;
 	receivedAt: number;
 	/** Internal: locally simulated message (/qqbot-fake). Reply is not sent to QQ. */
-	fake?: boolean;
+	fake?: boolean | undefined;
 }
 
 export type AttachmentStatus = "ready" | "rejected" | "failed";
@@ -152,27 +152,27 @@ export type PreparedAttachment =
 			kind: "image";
 			filename: string;
 			status: AttachmentStatus;
-			mimeType?: string;
-			note?: string;
-			errorCode?: string;
+			mimeType?: string | undefined;
+			note?: string | undefined;
+			errorCode?: string | undefined;
 	  }
 	| {
 			kind: "voice";
 			filename: string;
 			status: AttachmentStatus;
-			transcript?: string;
-			source?: "qq-asr" | "stt";
-			note?: string;
-			errorCode?: string;
+			transcript?: string | undefined;
+			source?: "qq-asr" | "stt" | undefined;
+			note?: string | undefined;
+			errorCode?: string | undefined;
 	  }
 	| {
 			kind: "document";
 			filename: string;
 			status: AttachmentStatus;
-			extractedText?: string;
-			truncated?: boolean;
-			note?: string;
-			errorCode?: string;
+			extractedText?: string | undefined;
+			truncated?: boolean | undefined;
+			note?: string | undefined;
+			errorCode?: string | undefined;
 	  }
 	| {
 			kind: "unsupported";
@@ -196,7 +196,7 @@ export interface PreparedQQMessage {
 export interface QQReplyTarget {
 	type: "private" | "group";
 	userOpenId: string;
-	groupOpenId?: string;
+	groupOpenId?: string | undefined;
 	msgId: string; // original inbound message id
 	createdAt: number; // to reason about the passive-reply window
 }
@@ -236,7 +236,7 @@ export type QQOutboundEventKind = "outbound_start" | "outbound_uploaded" | "outb
 
 export interface QQMediaUploadResult {
 	fileInfo: string;
-	fileUuid?: string;
+	fileUuid?: string | undefined;
 	ttl: number;
 }
 
@@ -245,8 +245,8 @@ export interface QQOutboundDeliveryRecord {
 	kind: "image" | "file";
 	bytes: number;
 	status: "sent" | "failed" | "unknown";
-	errorCode?: string;
-	note?: string;
+	errorCode?: string | undefined;
+	note?: string | undefined;
 }
 
 /** Process-local events mirrored only into the Pi terminal that ran /qqbot-start. */
@@ -254,10 +254,10 @@ export type QQTerminalEvent =
 	| {
 			kind: "runtime_state";
 			connection: ConnectionState;
-			detail?: string;
+			detail?: string | undefined;
 			queueSize: number;
 			running: boolean;
-			activeLabel?: string;
+			activeLabel?: string | undefined;
 			at: number;
 	  }
 	| {
@@ -279,9 +279,9 @@ export type QQTerminalEvent =
 			total: number;
 			attachmentKind: string;
 			filename: string;
-			bytes?: number;
-			status?: AttachmentStatus;
-			note?: string;
+			bytes?: number | undefined;
+			status?: AttachmentStatus | undefined;
+			note?: string | undefined;
 			at: number;
 	  }
 	| {
@@ -290,8 +290,8 @@ export type QQTerminalEvent =
 			mediaKind: "image" | "file";
 			filename: string;
 			bytes: number;
-			errorCode?: string;
-			note?: string;
+			errorCode?: string | undefined;
+			note?: string | undefined;
 			at: number;
 	  }
 	| { kind: "run_start"; messageId: string; at: number }
@@ -326,11 +326,11 @@ export type QQTerminalEvent =
 			messageId: string;
 			ok: boolean;
 			sentChunks: number;
-			error?: string;
+			error?: string | undefined;
 			at: number;
 	  }
 	| { kind: "run_end"; messageId: string; at: number }
-	| { kind: "error"; messageId?: string; stage: string; message: string; at: number };
+	| { kind: "error"; messageId?: string | undefined; stage: string; message: string; at: number };
 
 /** Optional observer owned by one Pi TUI process. */
 export interface QQConversationObserver {
