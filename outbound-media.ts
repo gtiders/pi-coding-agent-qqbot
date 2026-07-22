@@ -240,8 +240,6 @@ export function normalizeInputPath(input: string, cwd: string): string {
 	if (!value || /[\u0000-\u001f\u007f]/.test(value)) {
 		throw new QQOutboundMediaError("path_invalid", "本地文件路径无效");
 	}
-	const windows = value.match(/^([a-zA-Z]):[\\/](.*)$/s);
-	if (windows) value = `/mnt/${windows[1].toLowerCase()}/${windows[2].replaceAll("\\", "/")}`;
 	return resolve(isAbsolute(value) ? value : resolve(cwd, value));
 }
 

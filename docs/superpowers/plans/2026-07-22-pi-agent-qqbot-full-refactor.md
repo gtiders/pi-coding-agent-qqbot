@@ -212,7 +212,7 @@ git commit -m "test: establish strict cross-platform TDD baseline"
 - 创建：`test/integration/platform/opened-file-identity.test.ts`
 - 修改：`test/characterization/outbound-media.test.ts`
 
-- [ ] **步骤 1：编写原生路径失败测试**
+- [x] **步骤 1：编写原生路径失败测试**
 
 ```ts
 import test from "node:test";
@@ -239,7 +239,7 @@ npm run test:focused -- test/unit/platform/local-paths.test.ts
 
 预期：FAIL，模块不存在。
 
-- [ ] **步骤 2：实现纯路径解析与 containment helper**
+- [x] **步骤 2：实现纯路径解析与 containment helper**
 
 ```ts
 import type path from "node:path";
@@ -258,7 +258,7 @@ export function isWithinRoot(candidate: string, root: string, pathApi: PathApi):
 }
 ```
 
-- [ ] **步骤 3：编写 opened-file identity 与 race 失败测试**
+- [x] **步骤 3：编写 opened-file identity 与 race 失败测试**
 
 覆盖：普通文件、目录、空文件、hard link、root 外 symlink/junction、打开后 rename replacement、abort、重复 close。平台专属 capability 不满足时使用带原因的 `test.skip()`。
 
@@ -270,7 +270,7 @@ npm run test:focused -- test/integration/platform/opened-file-identity.test.ts
 
 预期：FAIL，模块不存在。
 
-- [ ] **步骤 4：实现按平台明确降级的 opened file API**
+- [x] **步骤 4：实现按平台明确降级的 opened file API**
 
 ```ts
 export interface OpenedLocalFile {
@@ -290,7 +290,7 @@ export interface OpenLocalFileOptions {
 
 实现要求：先 `realpath` + containment；以 `O_RDONLY | O_NOFOLLOW(若可用)` 打开；handle stat 必须为普通文件且 `nlink <= 1`；Linux 可比较 `/proc/self/fd/<fd>`；其他平台比较打开前 path stat、handle stat 和读取后 handle stat；所有路径 finally 关闭 handle。
 
-- [ ] **步骤 5：替换旧 WSL characterization assertion 并恢复绿线**
+- [x] **步骤 5：替换旧 WSL characterization assertion 并恢复绿线**
 
 删除 `/mnt/c` 期望，改为根据 `process.platform` 验证当前宿主原生路径；源码测试中增加断言不生成 `/mnt/`。
 
@@ -305,7 +305,7 @@ npm run typecheck
 
 预期：PASS。
 
-- [ ] **步骤 6：提交平台层**
+- [x] **步骤 6：提交平台层**
 
 ```powershell
 git add src/infrastructure/platform test/unit/platform test/integration/platform test/characterization/outbound-media.test.ts
