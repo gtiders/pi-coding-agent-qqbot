@@ -1,23 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeConfig } from "../../config.ts";
+import { normalizeConfig } from "../../src/infrastructure/config/normalize-config";
 
-test("normalizes legacy and current config defaults", () => {
-	const legacy = normalizeConfig({
+test("normalizes schema 3 defaults and ignores removed compatibility fields", () => {
+	const defaults = normalizeConfig({
 		enabled: true,
 		autoStart: false,
+		allowCommands: false,
 		appId: "test",
 		clientSecret: "test",
 		commands: { modelPageSize: 99 },
 	});
-	assert.equal(legacy.schemaVersion, 3);
-	assert.equal(legacy.startup.mode, "manual");
-	assert.equal(legacy.commands.modelPageSize, 6);
-	assert.equal(legacy.progress.enabled, true);
-	assert.equal(legacy.progress.ackAfterMs, 3000);
-	assert.equal(legacy.outboundMedia.enabled, false);
-	assert.equal(legacy.outboundMedia.adminsOnly, true);
+	assert.equal(defaults.schemaVersion, 3);
+	assert.equal(defaults.startup.mode, "auto");
+	assert.equal(defaults.commands.enabled, true);
+	assert.equal(defaults.commands.modelPageSize, 6);
+	assert.equal(defaults.progress.enabled, true);
+	assert.equal(defaults.progress.ackAfterMs, 3000);
+	assert.equal(defaults.outboundMedia.enabled, false);
+	assert.equal(defaults.outboundMedia.adminsOnly, true);
 
 	const current = normalizeConfig({
 		schemaVersion: 1,

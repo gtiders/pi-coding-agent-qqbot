@@ -2,16 +2,15 @@ node_modules/
 .env
 .env.*
 *.log
+*.tgz
 .DS_Store
 .git/
-
-# Real local QQ bot config. Keep only pi-qqbot.json.example in packages.
-pi-qqbot.json
-
-# Local release artifacts and non-runtime docs.
-*.tgz
-*.test.ts
-*PLAN*.md
-*OPTIMIZATION_PLAN.md
-*DEVELOPMENT_PLAN.md
+.github/
+.pi-subagents/
+test/
+docs/
+scripts/
 package-lock.json
+tsconfig.json
+pi-agent-qqbot.json
+pi-qqbot.json

@@ -1,7 +1,7 @@
 {
-  "name": "@xsqm/pi-qqbot",
+  "name": "pi-agent-qqbot",
   "version": "0.4.7",
-  "description": "A Pi extension that connects the official QQ Bot API to a local Pi coding agent.",
+  "description": "Connect the official QQ Bot API to a local Pi coding agent.",
   "license": "Apache-2.0",
   "type": "module",
   "author": "XiaoSQM",
@@ -13,59 +13,28 @@
     "qq-bot",
     "coding-agent"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/XiaoSQM/pi-coding-agent-qqbot.git"
-  },
-  "bugs": {
-    "url": "https://github.com/XiaoSQM/pi-coding-agent-qqbot/issues"
-  },
-  "homepage": "https://github.com/XiaoSQM/pi-coding-agent-qqbot#readme",
   "files": [
-    "index.ts",
-    "access-requests.ts",
-    "attachment-downloader.ts",
-    "attachment-extractors.ts",
-    "attachment-pipeline.ts",
-    "command-controller.ts",
-    "command-parser.ts",
-    "config.ts",
-    "conversation-registry.ts",
-    "host-registry.ts",
-    "model-pages.ts",
-    "outbound-media.ts",
-    "qq-api.ts",
-    "qq-auth.ts",
-    "qq-gateway.ts",
-    "qq-keyboard.ts",
-    "qq-session.ts",
-    "queue.ts",
-    "reply-formatter.ts",
-    "router.ts",
-    "stt.ts",
-    "terminal-view.ts",
-    "types.ts",
-    "user-facing.ts",
-    "pi-qqbot.json.example",
+    "src",
+    "pi-agent-qqbot.json.example",
     "README.md",
     "LICENSE"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./src/index.ts"
     ]
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx test/run-all.ts",
     "test:focused": "node --import tsx test/run-all.ts",
-    "verify": "npm run typecheck && npm test",
+    "identity:check": "node scripts/check-identity.mjs",
+    "pack:check": "npm pack --dry-run --json --ignore-scripts",
+    "test:package": "node scripts/check-package.mjs",
+    "smoke:pi": "node scripts/smoke-pi-load.mjs",
+    "verify": "npm run identity:check && npm run typecheck && npm test",
     "prepack": "npm run verify",
-    "prepublishOnly": "npm run verify",
-    "pack:check": "npm pack --dry-run"
+    "prepublishOnly": "npm run verify"
   },
   "dependencies": {
     "unpdf": "1.6.2",

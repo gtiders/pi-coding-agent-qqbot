@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildCommandKeyboard } from "../../qq-keyboard.ts";
-import type { QQInboundMessage } from "../../types.ts";
+import { buildCommandKeyboard } from "../../src/presentation/qq/keyboard";
+import type { QQInboundMessage } from "../../src/application/ports";
 
 test("bounds QQ command keyboards", () => {
 	const message: QQInboundMessage = {

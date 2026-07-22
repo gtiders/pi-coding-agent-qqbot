@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeCommandText, parseQQCommand } from "../../command-parser.ts";
-import { extractFinalAssistantText, formatUserFacingAgentError, humanizeSessionPreview } from "../../user-facing.ts";
+import { normalizeCommandText, parseQQCommand } from "../../src/presentation/qq/command-parser";
+import { extractFinalAssistantText, formatUserFacingAgentError, humanizeSessionPreview } from "../../src/presentation/qq/user-facing-errors";
 
 test("normalizes command text", () => {
 	assert.equal(normalizeCommandText("／help"), "/help");

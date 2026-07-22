@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import test from "node:test";
 
-import { normalizeConfig } from "../../config.ts";
-import { normalizeInputPath, QQOutboundDeliveryContext, QQOutboundMediaError, resolveAllowedLocalFile } from "../../outbound-media.ts";
+import { normalizeConfig } from "../../src/infrastructure/config/normalize-config";
+import { normalizeInputPath, QQOutboundDeliveryContext, QQOutboundMediaError, resolveAllowedLocalFile } from "../../src/infrastructure/media/outbound-media";
 
 test("uses host-native paths and preserves outbound delivery behavior", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-agent-qqbot-outbound-test-"));

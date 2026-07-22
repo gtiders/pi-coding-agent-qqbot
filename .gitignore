@@ -5,6 +5,8 @@ node_modules/
 *.tgz
 .DS_Store
 .worktrees/
+.pi-subagents/
 
-# Real local QQ bot config. Keep only pi-qqbot.json.example in git.
+# Real local configuration files are never committed.
+pi-agent-qqbot.json
 pi-qqbot.json

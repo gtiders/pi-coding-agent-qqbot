@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { QQApi } from "../../qq-api.ts";
+import { QQApi } from "../../src/infrastructure/qq/api";
 
 test("builds private and group media payloads", async () => {
 	const originalFetch = globalThis.fetch;
