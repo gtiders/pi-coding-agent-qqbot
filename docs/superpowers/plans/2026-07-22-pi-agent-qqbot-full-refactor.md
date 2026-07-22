@@ -321,7 +321,7 @@ git commit -m "refactor(platform): enforce native path and file identity contrac
 - 创建：`test/unit/domain/*.test.ts`
 - 创建：`test/unit/architecture/import-boundaries.test.ts`
 
-- [ ] **步骤 1：先写 access、dedupe、queue 失败测试**
+- [x] **步骤 1：先写 access、dedupe、queue 失败测试**
 
 测试必须覆盖 allow user/group、管理员、pending request TTL/cooldown、授权前不保存正文；dedupe TTL/最大容量；FIFO/full/remove conversation。
 
@@ -333,7 +333,7 @@ npm run test:focused -- test/unit/domain
 
 预期：FAIL，domain 模块不存在。
 
-- [ ] **步骤 2：实现最小 domain API**
+- [x] **步骤 2：实现最小 domain API**
 
 ```ts
 export interface Clock { now(): number; }
@@ -345,7 +345,7 @@ export class DomainError extends Error {
 
 `BoundedMessageQueue` 只管理 FIFO；`MessageDedupe.admit(id)` 只管理 TTL 和容量；不导入 QQ、Pi、fs 或 presentation。
 
-- [ ] **步骤 3：先写 ReplyBudget 状态表失败测试**
+- [x] **步骤 3：先写 ReplyBudget 状态表失败测试**
 
 ```ts
 const budget = new ReplyBudget(4);
@@ -357,7 +357,7 @@ assert.equal(budget.remaining, 1);
 
 覆盖 progress+final、busy+final、media 保留 final、Markdown rejected 后 plain 使用新 seq、耗尽返回 undefined、同类 ack 不重复。
 
-- [ ] **步骤 4：实现 ReplyBudget 为 msg_seq 唯一所有者**
+- [x] **步骤 4：实现 ReplyBudget 为 msg_seq 唯一所有者**
 
 ```ts
 export type ReplyPurpose = "progress" | "busy" | "media" | "markdown" | "plain" | "final";
@@ -377,11 +377,11 @@ export class ReplyBudget {
 }
 ```
 
-- [ ] **步骤 5：添加依赖方向测试**
+- [x] **步骤 5：添加依赖方向测试**
 
 扫描 `src/**/*.ts` 的相对 import，断言 `domain` 不导入其他层，`application` 不导入具体 `infrastructure` 或 `presentation`。
 
-- [ ] **步骤 6：验证并提交**
+- [x] **步骤 6：验证并提交**
 
 ```powershell
 npm run test:focused -- test/unit/domain
@@ -401,7 +401,7 @@ git commit -m "refactor(domain): extract access queue dedupe and reply budget"
 - 创建：`test/integration/config/config-repository.test.ts`
 - 创建：`pi-agent-qqbot.json.example`
 
-- [ ] **步骤 1：写新配置路径与无兼容失败测试**
+- [x] **步骤 1：写新配置路径与无兼容失败测试**
 
 ```ts
 assert.equal(configPath("C:\\Users\\me"), "C:\\Users\\me\\.pi\\agent\\pi-agent-qqbot.json");
@@ -409,15 +409,15 @@ assert.equal(configPath("C:\\Users\\me"), "C:\\Users\\me\\.pi\\agent\\pi-agent-q
 
 并在临时 home 中只创建 `pi-qqbot.json`，断言 repository 返回 `missing: true`。
 
-- [ ] **步骤 2：迁移并测试 schema 3 normalization**
+- [x] **步骤 2：迁移并测试 schema 3 normalization**
 
 把当前默认值和 clamp 行为转入 `normalize-config.ts`。测试现有全部 config assertions；删除旧 `autoStart`/`allowCommands` 作为现行输入兼容。
 
-- [ ] **步骤 3：写错误分类与并发更新失败测试**
+- [x] **步骤 3：写错误分类与并发更新失败测试**
 
 覆盖 `ENOENT`、`EACCES/EPERM`、目录占位、坏 JSON；并发 100 次 approve/revoke 后结果不得丢更新，失败后不得残留 `.tmp-*`。
 
-- [ ] **步骤 4：实现串行、原子、保留未知字段的 repository**
+- [x] **步骤 4：实现串行、原子、保留未知字段的 repository**
 
 ```ts
 export class FileConfigRepository {
@@ -452,11 +452,11 @@ git commit -m "refactor(config): serialize secure pi-agent-qqbot config writes"
 - 创建：`test/unit/presentation/*.test.ts`
 - 创建：`test/characterization/{command-behavior,reply-formatting,local-command-registration}.test.ts`
 
-- [ ] **步骤 1：写完整命令和展示 characterization tests**
+- [x] **步骤 1：写完整命令和展示 characterization tests**
 
 锁定 QQ 侧 `/help|status|last|model|thinking|new|sessions|resume|name|compact|stop`，兼容别名 `/qqbot-help|status|last`，以及本地 `/qqbot-start|stop|status|runtime|reconnect|last|requests|approve|deny|revoke`。
 
-- [ ] **步骤 2：定义 ports，不引用具体适配器**
+- [x] **步骤 2：定义 ports，不引用具体适配器**
 
 ```ts
 export interface QQGatewayPort { start(): Promise<void>; stop(): Promise<void>; }
@@ -468,7 +468,7 @@ export interface RuntimeObserver { onEvent(event: RuntimeEvent): void; }
 
 类型放到 owning module 或 `ports.ts`，不创建新的全域 `types.ts`。
 
-- [ ] **步骤 3：先把旧 assertions 指向新 presentation 模块，确认失败**
+- [x] **步骤 3：先把旧 assertions 指向新 presentation 模块，确认失败**
 
 运行：
 
@@ -478,7 +478,7 @@ npm run test:focused -- test/unit/presentation
 
 预期：FAIL，新模块尚未实现。
 
-- [ ] **步骤 4：迁移纯 parser、keyboard、pagination、formatter、safe error**
+- [x] **步骤 4：迁移纯 parser、keyboard、pagination、formatter、safe error**
 
 错误映射必须过滤 secret/token、URL query、stack 和完整本地路径。Presentation 不构造 QQ/Pi/fs 客户端。
 
@@ -542,11 +542,11 @@ git commit -m "refactor(qq): isolate auth api gateway and payload normalization"
 - 创建：`test/integration/pi/{agent-session,conversation-registry}.test.ts`
 - 创建：`test/fixtures/pi-sdk.ts`
 
-- [ ] **步骤 1：写 SDK resolution 失败测试**
+- [x] **步骤 1：写 SDK resolution 失败测试**
 
 覆盖显式 URL/path、`import.meta.resolve`、launcher fallback、候选不存在、路径含空格；把 `process.argv[1]` 设为不含 Pi 包名仍应成功。
 
-- [ ] **步骤 2：实现验证后的 SDK loader**
+- [x] **步骤 2：实现验证后的 SDK loader**
 
 ```ts
 export interface SdkResolverOptions {
@@ -562,7 +562,7 @@ export interface SdkResolverOptions {
 
 覆盖 create runtime、model/thinking/new/list/resume/name/compact、abort/dispose、事件转换、outbound tool、初始化失败清理、同 conversation 只初始化一次、跨 conversation 隔离、LRU/idle disposal。
 
-- [ ] **步骤 4：迁移实现并采用新 namespace**
+- [x] **步骤 4：迁移实现并采用新 namespace**
 
 存储路径固定为 `<agentDir>/pi-agent-qqbot/sessions/<hash>`，hash salt 为 `pi-agent-qqbot\0${conversationKey}`；不读取或删除旧目录。扩展递归排除使用当前 package root 的 realpath，不匹配旧包路径字符串。
 
@@ -589,15 +589,15 @@ git commit -m "refactor(pi): add resilient SDK loading and isolated sessions"
 
 本地 fake HTTPS server 覆盖 redirect revalidation、private IP、DNS pinning、content-length/stream overflow、timeout、retry、abort、workspace cleanup、media sniff、TXT/PDF limits、DOC rejection、QQ ASR/STT fallback。
 
-- [ ] **步骤 2：迁移入站媒体实现**
+- [x] **步骤 2：迁移入站媒体实现**
 
 临时目录改为 `<tmp>/pi-agent-qqbot/<runtime>/<message>`；User-Agent 由集中 product identity 提供；所有 success/failure/abort 路径删除 workspace。
 
-- [ ] **步骤 3：写 outbound 失败测试**
+- [x] **步骤 3：写 outbound 失败测试**
 
 覆盖 allow-root、root 内/外 symlink、Windows junction、rename race、hard link、non-file、empty/oversize、PNG/JPEG sniff、unknown send result、observer throw、close/abort。
 
-- [ ] **步骤 4：接入 platform API 与 ReplyBudget**
+- [x] **步骤 4：接入 platform API 与 ReplyBudget**
 
 ```ts
 export class OutboundMediaDelivery {
@@ -645,15 +645,15 @@ export class FakeReplyPort implements QQReplyPort {
 
 覆盖 allow/deny、access request、不保留未授权正文、dedupe、command/prompt 分流、纯附件入队、queue full、全局 FIFO、按 conversation `/stop` 以及任务 5 的所有命令语义。
 
-- [ ] **步骤 3：实现 `processInboundMessage` 与 `executeRemoteCommand`**
+- [x] **步骤 3：实现 `processInboundMessage` 与 `executeRemoteCommand`**
 
 函数通过 ports 接收依赖，不构造具体 adapter。授权检查必须早于附件下载和 prompt 保存；去重只针对已授权/可处理消息。
 
-- [ ] **步骤 4：写 Agent turn cleanup 失败测试**
+- [x] **步骤 4：写 Agent turn cleanup 失败测试**
 
 覆盖成功、Agent error、empty result、vision refusal、abort、attachment cleanup、outbound close、observer throw、cleanup error 不覆盖 primary error。
 
-- [ ] **步骤 5：实现 `runAgentTurn` 的确定性 finally**
+- [x] **步骤 5：实现 `runAgentTurn` 的确定性 finally**
 
 ```ts
 try {
@@ -668,7 +668,7 @@ try {
 }
 ```
 
-- [ ] **步骤 6：写并实现统一 `deliverReply`**
+- [x] **步骤 6：写并实现统一 `deliverReply`**
 
 测试 progress+media+Markdown rejected+plain+final 的序号表。所有发送从同一 `ReplyBudget` reserve；Markdown fallback 必须使用新 seq。
 
@@ -696,19 +696,19 @@ git commit -m "refactor(application): compose inbound commands turns and replies
 - 创建：`test/unit/terminal/*.test.ts`
 - 创建：`test/integration/extension/*.test.ts`
 
-- [ ] **步骤 1：写 reducer 与 widget 失败测试**
+- [x] **步骤 1：写 reducer 与 widget 失败测试**
 
 Reducer 纯函数覆盖 runtime status、message/tool/media line、bounded history、dispose；widget 在固定 width 下输出稳定，不包含状态变更逻辑。
 
-- [ ] **步骤 2：迁移 terminal presentation**
+- [x] **步骤 2：迁移 terminal presentation**
 
 `event-reducer.ts` 不导入 Pi TUI；`widget.ts` 是唯一直接依赖 `@earendil-works/pi-tui` 的 terminal 文件。
 
-- [ ] **步骤 3：写本地命令注册与审批失败测试**
+- [x] **步骤 3：写本地命令注册与审批失败测试**
 
 Fake ExtensionAPI/Context 覆盖 TUI/非 TUI、所有 `/qqbot-*` 命令、approve/revoke persist-first、取消确认、错误通知脱敏。
 
-- [ ] **步骤 4：实现本地命令与审批 UI**
+- [x] **步骤 4：实现本地命令与审批 UI**
 
 命令 handler 只调用 application/lifecycle API；不在 `src/index.ts` 内创建长闭包。
 
@@ -716,7 +716,7 @@ Fake ExtensionAPI/Context 覆盖 TUI/非 TUI、所有 `/qqbot-*` 命令、approv
 
 覆盖 auto/manual/disabled/invalid config、start single-flight、stop-during-start、start failure cleanup/retry、owner attach/detach、replacement/drain、stale UI context、重复 stop/shutdown。
 
-- [ ] **步骤 6：实现新 host symbol 生命周期**
+- [x] **步骤 6：实现新 host symbol 生命周期**
 
 使用 `Symbol.for("pi-agent-qqbot.host.v1")`。Build ID 必须覆盖整个 `src/` 或由 package version + source fingerprint 明确注入，不能只扫描当前目录。旧 symbol 不接管；切换时要求冷重启。
 
@@ -740,11 +740,11 @@ git commit -m "refactor(extension): rebuild commands terminal view and host life
 - 创建：`test/integration/extension/composition-root.test.ts`
 - 删除：根目录全部生产 `*.ts`、根目录旧 `*.test.ts`
 
-- [ ] **步骤 1：写 composition root 失败测试**
+- [x] **步骤 1：写 composition root 失败测试**
 
 以 fake factories 加载 default export，断言命令与 lifecycle events 注册，且 factory 阶段不启动 socket/timer/watcher。
 
-- [ ] **步骤 2：实现唯一 composition root**
+- [x] **步骤 2：实现唯一 composition root**
 
 ```ts
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -758,7 +758,7 @@ export default function piAgentQQBot(pi: ExtensionAPI): void {
 }
 ```
 
-- [ ] **步骤 3：运行新入口完整测试后删除旧模块**
+- [x] **步骤 3：运行新入口完整测试后删除旧模块**
 
 将 `tsconfig.json` 的 `include` 收紧为 `["src/**/*.ts", "test/**/*.ts"]`。只有以下命令全部通过才删除：
 
@@ -770,7 +770,7 @@ npm test
 
 删除根目录 `index.ts`、`router.ts`、`types.ts` 及其余旧生产模块和已迁移测试。
 
-- [ ] **步骤 4：再次验证依赖方向与完整行为**
+- [x] **步骤 4：再次验证依赖方向与完整行为**
 
 ```powershell
 npm run test:focused -- test/unit/architecture/import-boundaries.test.ts
@@ -780,7 +780,7 @@ npm test
 
 预期：PASS；根 `router.ts` 和 `types.ts` 不存在。
 
-- [ ] **步骤 5：提交 cutover**
+- [x] **步骤 5：提交 cutover**
 
 ```powershell
 git add -A src test
@@ -798,7 +798,7 @@ git commit -m "refactor: cut over to layered pi-agent-qqbot runtime"
 - 移动：四份根目录历史计划到 `docs/plans/legacy/`
 - 删除：`pi-qqbot.json.example`
 
-- [ ] **步骤 1：先写 identity check 失败脚本**
+- [x] **步骤 1：先写 identity check 失败脚本**
 
 `scripts/check-identity.mjs` 扫描现行 `src/`、`package.json`、`README.md`、新示例，禁止：`@xsqm/pi-qqbot`、`pi-coding-agent-qqbot`、`pi-qqbot.json`、`/mnt/c`、旧日志/User-Agent 身份。允许 `docs/plans/legacy` 和已批准规格中的历史描述。
 
@@ -810,7 +810,7 @@ node scripts/check-identity.mjs
 
 预期：FAIL，身份尚未完全切换。
 
-- [ ] **步骤 2：更新 package metadata 与 files allowlist**
+- [x] **步骤 2：更新 package metadata 与 files allowlist**
 
 ```json
 {
@@ -822,15 +822,15 @@ node scripts/check-identity.mjs
 
 删除 `publishConfig`、`repository`、`bugs`、`homepage`；不增加 `main`、`exports` 或 `dist`。
 
-- [ ] **步骤 3：统一代码与 ignore 身份**
+- [x] **步骤 3：统一代码与 ignore 身份**
 
 更新日志、temp dir、host symbol、widget/status keys、session namespace、recursion exclusion、User-Agent。`.gitignore` 同时忽略真实 `pi-agent-qqbot.json`、旧真实配置、`.pi-subagents/`、tgz/env；`.npmignore` 作为 defense in depth。
 
-- [ ] **步骤 4：重写当前 README**
+- [x] **步骤 4：重写当前 README**
 
 中英文都包含：`pi-agent-qqbot` 名称、新配置文件、bash/zsh 与 PowerShell、本地 path 安装、原生 macOS/Linux/Windows、明确不支持 WSL、安全边界。npm 安装明确标注“尚未发布”；不提供 Git clone URL，不引用旧远端。
 
-- [ ] **步骤 5：声明最终验证 scripts 并实现 package tarball 检查**
+- [x] **步骤 5：声明最终验证 scripts 并实现 package tarball 检查**
 
 在 `package.json` 增加：
 
@@ -854,11 +854,11 @@ const forbidden = [/\.test\.ts$/, /^test\//, /^docs\//, /pi-agent-qqbot\.json$/,
 
 再在临时 consumer 安装 tgz，验证 `npm ls --omit=dev` 和 peer metadata；finally 删除临时目录。
 
-- [ ] **步骤 6：实现隔离 Pi RPC smoke**
+- [x] **步骤 6：实现隔离 Pi RPC smoke**
 
 `scripts/smoke-pi-load.mjs` 设置临时 `PI_CODING_AGENT_DIR`，启动 `pi --mode rpc --no-session --no-extensions -e ./src/index.ts`，发送 `get_commands`，断言本地 qqbot commands 注册并干净退出；不得连接 QQ。
 
-- [ ] **步骤 7：创建三平台 CI 定义**
+- [x] **步骤 7：创建三平台 CI 定义**
 
 ```yaml
 strategy:
@@ -877,7 +877,7 @@ steps:
 
 不得添加 publish job。
 
-- [ ] **步骤 8：归档历史计划并验证身份/包**
+- [x] **步骤 8：归档历史计划并验证身份/包**
 
 ```powershell
 npm run identity:check
@@ -890,7 +890,7 @@ npm run smoke:pi -- .
 
 预期：全部 PASS。
 
-- [ ] **步骤 9：提交包与文档**
+- [x] **步骤 9：提交包与文档**
 
 ```powershell
 git add package.json package-lock.json .gitignore .npmignore README.md scripts .github docs/plans pi-agent-qqbot.json.example
@@ -906,7 +906,7 @@ git commit -m "chore: rename package and lock package contents"
 - 外部状态：`~/.pi/agent/pi-qqbot.json` -> `~/.pi/agent/pi-agent-qqbot.json`
 - 不修改项目源码
 
-- [ ] **步骤 1：先运行全部自动 gate**
+- [x] **步骤 1：先运行全部自动 gate**
 
 ```powershell
 npm install
@@ -924,7 +924,7 @@ npm run smoke:pi -- .
 
 确认旧 host 不再驻留。不要用 `/reload` 跨旧/新 symbol 测试。
 
-- [ ] **步骤 3：只检查存在性并安全移动配置**
+- [x] **步骤 3：只检查存在性并安全移动配置**
 
 ```powershell
 $old = Join-Path $HOME ".pi\agent\pi-qqbot.json"
@@ -960,7 +960,7 @@ git diff --check
 - 审查：全部 diff
 - 重点：`src/index.ts`、`src/application/**`、`src/domain/**`、`src/infrastructure/config/**`、`src/infrastructure/platform/**`、`src/infrastructure/media/outbound-media.ts`、`package.json`、`README.md`
 
-- [ ] **步骤 1：逐条映射设计完成标准到证据**
+- [x] **步骤 1：逐条映射设计完成标准到证据**
 
 形成表格：需求、文件证据、测试命令、结果、残余风险。macOS/Linux CI 未实际运行时明确写“仅定义，未验证”。
 
@@ -979,11 +979,11 @@ git status --short
 
 同时运行 `lens_diagnostics mode=all`；有 blocking error 不得完成。
 
-- [ ] **步骤 3：执行独立代码审查**
+- [x] **步骤 3：执行独立代码审查**
 
 检查依赖方向、error redaction、finally cleanup、ReplyBudget 单一所有权、无 WSL mapping、无现行旧身份、无真实配置/凭据、无 publish/remote mutation。
 
-- [ ] **步骤 4：只修复审查发现并重跑相关 gate**
+- [x] **步骤 4：只修复审查发现并重跑相关 gate**
 
 每个 blocker/high finding 独立修复，使用所属任务的 focused test，再运行完整 gate。不得添加新产品功能。
 
