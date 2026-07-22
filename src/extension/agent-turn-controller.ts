@@ -29,7 +29,6 @@ export interface AgentTurnHost {
 	recordError(messageId: string, stage: string, detail: string): void;
 	emit(event: QQTerminalEvent): void;
 	debug(message: string): void;
-	scheduleNext(): void;
 }
 
 /** Runs one isolated QQ agent turn while the runtime owns queue and lifecycle state. */
@@ -37,6 +36,17 @@ export class AgentTurnController {
 	constructor(private readonly pipeline: AttachmentPipeline, private readonly host: AgentTurnHost) {}
 
 	async run(message: QQInboundMessage): Promise<void> {
+		const target: QQReplyTarget = {
+			type: message.type,
+			userOpenId: message.userOpenId,
+			groupOpenId: message.groupOpenId,
+			msgId: message.id,
+			createdAt: Date.now(),
+		};
+		const runAbort = new AbortController();
+		// Claim the single-run slot before the first await so another pump cannot
+		// dequeue a second message while the conversation is being initialized.
+		const runSignal = this.host.beginRun(message, target, runAbort);
 		let session: QQAgentSession;
 		try {
 			session = await this.host.getConversation(message);
@@ -47,19 +57,9 @@ export class AgentTurnController {
 				message,
 				`## QQ 会话不可用\n\n${formatUserFacingAgentError(error)}\n\n请稍后重试，或在主机查看 /qqbot-status。`,
 			).catch(() => undefined);
-			this.host.scheduleNext();
+			this.host.finishRun(message, runAbort);
 			return;
 		}
-
-		const target: QQReplyTarget = {
-			type: message.type,
-			userOpenId: message.userOpenId,
-			groupOpenId: message.groupOpenId,
-			msgId: message.id,
-			createdAt: Date.now(),
-		};
-		const runAbort = new AbortController();
-		const runSignal = this.host.beginRun(message, target, runAbort);
 		let prepared: Awaited<ReturnType<AttachmentPipeline["prepare"]>> | undefined;
 		let delivery: QQOutboundDeliveryContext | undefined;
 		let ackTimer: ReturnType<typeof setTimeout> | undefined;

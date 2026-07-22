@@ -65,7 +65,7 @@ test("agent turn controller cleans up adapters before finishing runtime state", 
 		config: () => config,
 		api: () => undefined,
 		cwd: () => process.cwd(),
-		getConversation: async () => session as never,
+		getConversation: async () => { calls.push("get"); return session as never; },
 		beginRun: (_message, _target: QQReplyTarget, abort) => { calls.push("begin"); return abort.signal; },
 		finishRun: () => { calls.push("finish"); },
 		isRunActive: () => true,
@@ -82,11 +82,39 @@ test("agent turn controller cleans up adapters before finishing runtime state", 
 		recordError: () => undefined,
 		emit: (event) => { events.push(event); },
 		debug: () => undefined,
-		scheduleNext: () => undefined,
 	});
 
 	await controller.run(fakeMessage("question"));
 	assert.deepEqual(replies, ["answer"]);
-	assert.deepEqual(calls, ["begin", "prepare", "bind", "run", "unbind", "cleanup", "finish"]);
+	assert.deepEqual(calls, ["begin", "get", "prepare", "bind", "run", "unbind", "cleanup", "finish"]);
 	assert.ok(events.some((event) => event.kind === "assistant_start") === false);
+});
+
+test("agent turn claims and releases runtime state when session initialization fails", async () => {
+	const calls: string[] = [];
+	const controller = new AgentTurnController({} as never, {
+		config: () => config,
+		api: () => undefined,
+		cwd: () => process.cwd(),
+		getConversation: async () => { calls.push("get"); throw new Error("session failed"); },
+		beginRun: (_message, _target: QQReplyTarget, abort) => { calls.push("begin"); return abort.signal; },
+		finishRun: () => { calls.push("finish"); },
+		isRunActive: () => true,
+		reply: async () => { calls.push("reply"); },
+		deliver: async () => undefined,
+		errorKeyboard: () => undefined,
+		sendProgress: async () => undefined,
+		hasMediaCapacity: () => true,
+		reserveMediaSequence: () => 1,
+		setAttachmentStatus: () => undefined,
+		setAttachmentError: () => undefined,
+		setOutboundStatus: () => undefined,
+		setOutboundError: () => undefined,
+		recordError: () => { calls.push("error"); },
+		emit: () => undefined,
+		debug: () => undefined,
+	});
+
+	await controller.run(fakeMessage("question"));
+	assert.deepEqual(calls, ["begin", "get", "error", "reply", "finish"]);
 });

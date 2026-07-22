@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { deliverFormattedReply, deliverReply } from "../../../src/application/deliver-reply.ts";
+import {
+	deliverFormattedReply,
+	deliverReply,
+	ReplyBudgetExhaustedError,
+	ReplyDeliveryError,
+} from "../../../src/application/deliver-reply.ts";
 import { executeRemoteCommand } from "../../../src/application/execute-remote-command.ts";
 import { processInboundMessage } from "../../../src/application/process-inbound-message.ts";
 import { runAgentTurn } from "../../../src/application/run-agent-turn.ts";
@@ -120,6 +125,62 @@ test("uses a new sequence for plain fallback and continues remaining chunks", as
 		{ kind: "plain", text: "plain-1", seq: 2 },
 		{ kind: "plain", text: "plain-2", seq: 3 },
 	]);
+});
+
+test("rejects before a reply or keyboard can be silently truncated", async () => {
+	const sent: string[] = [];
+	const target: QQReplyTarget = { type: "private", userOpenId: "USER", msgId: "truncated", createdAt: Date.now() };
+	const budget = new ReplyBudget(2);
+	budget.reserve("progress");
+	await assert.rejects(
+		() => deliverFormattedReply(
+			{
+				async sendMarkdown(_target, text) { sent.push(text); },
+				async sendText(_target, text) { sent.push(text); },
+			},
+			budget,
+			{
+				target,
+				formatted: { markdown: ["md-1", "md-2"], plain: ["plain-1", "plain-2"] },
+				useMarkdown: true,
+				keyboard: { command: "/status" },
+				canFallback: () => false,
+			},
+		),
+		(error: unknown) =>
+			error instanceof ReplyDeliveryError &&
+			error.sentChunks === 0 &&
+			error.cause instanceof ReplyBudgetExhaustedError,
+	);
+	assert.deepEqual(sent, []);
+});
+
+test("reports Markdown fallback exhaustion instead of zero-chunk success", async () => {
+	const sent: string[] = [];
+	const target: QQReplyTarget = { type: "private", userOpenId: "USER", msgId: "fallback-exhausted", createdAt: Date.now() };
+	await assert.rejects(
+		() => deliverFormattedReply(
+			{
+				async sendMarkdown(_target, text) {
+					sent.push(`markdown:${text}`);
+					throw new Error("rejected");
+				},
+				async sendText(_target, text) { sent.push(`plain:${text}`); },
+			},
+			new ReplyBudget(1),
+			{
+				target,
+				formatted: { markdown: ["md"], plain: ["plain"] },
+				useMarkdown: true,
+				canFallback: () => true,
+			},
+		),
+		(error: unknown) =>
+			error instanceof ReplyDeliveryError &&
+			error.sentChunks === 0 &&
+			error.cause instanceof ReplyBudgetExhaustedError,
+	);
+	assert.deepEqual(sent, ["markdown:md"]);
 });
 
 test("delivers progress and final text from one reply budget", async () => {

@@ -47,6 +47,13 @@ export class ReplyDeliveryError extends Error {
 	}
 }
 
+export class ReplyBudgetExhaustedError extends Error {
+	constructor(readonly required: number, readonly available: number) {
+		super(`Reply requires ${required} sequence(s), but only ${available} remain`);
+		this.name = "ReplyBudgetExhaustedError";
+	}
+}
+
 /** Own sequence allocation for formatted reply chunks and Markdown fallback. */
 export async function deliverFormattedReply<TKeyboard>(
 	replies: RichReplyPort<TKeyboard>,
@@ -59,27 +66,30 @@ export async function deliverFormattedReply<TKeyboard>(
 	let delivery: FormattedDeliveryResult["delivery"] = useMarkdown ? "markdown" : "plain";
 	let sentChunks = 0;
 	try {
+		assertCapacity(budget, maxChunks);
 		for (let index = 0; index < maxChunks; index++) {
 			if (!useMarkdown) {
-				const sequence = budget.reserve("plain");
-				if (sequence === undefined) break;
-				await replies.sendText(options.target, options.formatted.plain[index], sequence);
+				const plain = requiredChunk(options.formatted.plain, index, "plain");
+				const sequence = reserveRequired(budget, "plain");
+				await replies.sendText(options.target, plain, sequence);
 			} else {
-				const markdownSequence = budget.reserve("markdown");
-				if (markdownSequence === undefined) break;
+				const markdown = requiredChunk(options.formatted.markdown, index, "markdown");
+				const markdownSequence = reserveRequired(budget, "markdown");
 				try {
 					await replies.sendMarkdown(
 						options.target,
-						options.formatted.markdown[index],
+						markdown,
 						markdownSequence,
 						index === maxChunks - 1 ? options.keyboard : undefined,
 					);
 				} catch (error) {
 					if (!options.canFallback(error)) throw error;
 					options.onFallback?.(error);
-					const plainSequence = budget.reserve("plain");
-					if (plainSequence === undefined) break;
-					await replies.sendText(options.target, options.formatted.plain[index], plainSequence);
+					const remainingPlainChunks = maxChunks - index;
+					assertCapacity(budget, remainingPlainChunks);
+					const plain = requiredChunk(options.formatted.plain, index, "plain fallback");
+					const plainSequence = reserveRequired(budget, "plain");
+					await replies.sendText(options.target, plain, plainSequence);
 					useMarkdown = false;
 					delivery = "plain-fallback";
 				}
@@ -90,4 +100,20 @@ export async function deliverFormattedReply<TKeyboard>(
 	} catch (error) {
 		throw new ReplyDeliveryError(sentChunks, error);
 	}
+}
+
+function assertCapacity(budget: ReplyBudget, required: number): void {
+	if (budget.remaining < required) throw new ReplyBudgetExhaustedError(required, budget.remaining);
+}
+
+function reserveRequired(budget: ReplyBudget, purpose: "markdown" | "plain"): number {
+	const sequence = budget.reserve(purpose);
+	if (sequence === undefined) throw new ReplyBudgetExhaustedError(1, 0);
+	return sequence;
+}
+
+function requiredChunk(chunks: readonly string[], index: number, kind: string): string {
+	const chunk = chunks[index];
+	if (chunk === undefined) throw new Error(`Missing ${kind} reply chunk ${index + 1}`);
+	return chunk;
 }

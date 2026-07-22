@@ -30,7 +30,7 @@ import { QQGateway } from "../infrastructure/qq/gateway";
 import { resolveSdkEntry } from "../infrastructure/pi/agent-session";
 import { MessageQueue } from "../application/message-queue";
 import { MessageDedupe } from "../domain/message-dedupe.ts";
-import { ReplyBudget } from "../domain/reply-budget.ts";
+import { ReplyBudget, ReplyBudgetPool } from "../domain/reply-budget.ts";
 import { formatQQReply, QQ_MAX_REPLY_CHUNKS } from "../presentation/qq/reply-formatter";
 import type {
 	ConnectionState,
@@ -43,6 +43,7 @@ import type {
 } from "../application/ports";
 
 const SUMMARY_MAX = 120;
+const MAX_RETAINED_REPLY_BUDGETS = 256;
 
 interface InboundSummary {
 	type: "private" | "group";
@@ -99,8 +100,8 @@ export class PiAgentQQBotRuntime {
 	private pumpTimer?: ReturnType<typeof setTimeout>;
 	private fakeCounter = 0;
 	private observer?: QQConversationObserver;
-	/** One passive-reply budget owns every sequence reservation for an inbound message. */
-	private readonly replyBudgets = new Map<string, ReplyBudget>();
+	/** One bounded passive-reply budget owns every reservation for an inbound message. */
+	private readonly replyBudgets = new ReplyBudgetPool(QQ_MAX_REPLY_CHUNKS, MAX_RETAINED_REPLY_BUDGETS);
 
 	constructor(config: PiAgentQQBotConfig) {
 		this.config = config;
@@ -153,7 +154,6 @@ export class PiAgentQQBotRuntime {
 			},
 			emit: (event) => this.emit(event),
 			debug: (message) => this.debugLog(message),
-			scheduleNext: () => this.schedulePump(),
 		});
 	}
 
@@ -261,6 +261,7 @@ export class PiAgentQQBotRuntime {
 		this.conversations = undefined;
 		await conversations?.dispose();
 		this.queue.clear();
+		this.replyBudgets.clear();
 		this.activeTarget = undefined;
 		this.activeFake = false;
 		this.activeAttachmentStatus = undefined;
@@ -322,6 +323,7 @@ export class PiAgentQQBotRuntime {
 		this.activeTarget = target;
 		this.activeFake = message.fake === true;
 		this.activeRunAbort = controller;
+		this.replyBudgets.acquire(message.id, { pin: true });
 		this.emit({ kind: "run_start", messageId: message.id, at: Date.now() });
 		this.emitRuntimeState();
 		return AbortSignal.any([this.runtimeAbort.signal, controller.signal]);
@@ -334,7 +336,7 @@ export class PiAgentQQBotRuntime {
 		this.activeAttachmentStatus = undefined;
 		this.activeOutboundMediaStatus = undefined;
 		if (this.activeRunAbort === controller) this.activeRunAbort = undefined;
-		this.replyBudgets.delete(message.id);
+		this.replyBudgets.release(message.id);
 		this.emit({ kind: "run_end", messageId: message.id, at: Date.now() });
 		this.emitRuntimeState();
 		this.schedulePump();
@@ -584,12 +586,7 @@ export class PiAgentQQBotRuntime {
 	}
 
 	private replyBudget(msgId: string): ReplyBudget {
-		let budget = this.replyBudgets.get(msgId);
-		if (!budget) {
-			budget = new ReplyBudget(QQ_MAX_REPLY_CHUNKS);
-			this.replyBudgets.set(msgId, budget);
-		}
-		return budget;
+		return this.replyBudgets.acquire(msgId);
 	}
 
 	private hasMediaReplyCapacity(msgId: string): boolean {

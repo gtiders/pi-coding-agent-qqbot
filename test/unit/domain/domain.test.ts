@@ -4,7 +4,7 @@ import test from "node:test";
 import { accessRole, PendingAccessRequests } from "../../../src/domain/access.ts";
 import { MessageDedupe } from "../../../src/domain/message-dedupe.ts";
 import { BoundedMessageQueue } from "../../../src/domain/message-queue.ts";
-import { ReplyBudget } from "../../../src/domain/reply-budget.ts";
+import { ReplyBudget, ReplyBudgetPool } from "../../../src/domain/reply-budget.ts";
 
 class FakeClock {
 	time = 0;
@@ -61,4 +61,21 @@ test("owns all passive reply sequence reservations", () => {
 	assert.equal(budget.reserve("plain"), 4);
 	assert.equal(budget.reserve("final"), undefined);
 	assert.equal(budget.remaining, 0);
+});
+
+test("bounds one-off reply budgets without evicting an active message", () => {
+	const budgets = new ReplyBudgetPool(4, 2);
+	const active = budgets.acquire("active", { pin: true });
+	assert.equal(active.reserve("progress"), 1);
+	budgets.acquire("command-1");
+	budgets.acquire("command-2");
+	assert.equal(budgets.size, 2);
+	assert.equal(budgets.acquire("active"), active);
+	assert.equal(active.reserve("final"), 2);
+	budgets.release("active");
+	assert.equal(budgets.size, 1);
+
+	const pinnedOnly = new ReplyBudgetPool(4, 1);
+	pinnedOnly.acquire("pinned", { pin: true });
+	assert.throws(() => pinnedOnly.acquire("overflow"), /capacity/i);
 });
