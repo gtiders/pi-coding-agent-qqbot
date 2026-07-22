@@ -39,6 +39,7 @@ export class AgentQQBotHost {
 	private runtimeStartedAt: number | undefined;
 	private startPromise: Promise<boolean> | undefined;
 	private stopPromise: Promise<void> | undefined;
+	private lifecycleGeneration = 0;
 	private stopTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly owners = new Set<symbol>();
 
@@ -113,7 +114,7 @@ export class AgentQQBotHost {
 	async start(ctx: ExtensionContext, observer?: QQConversationObserver): Promise<boolean> {
 		if (this.stopTimer) clearTimeout(this.stopTimer);
 		this.stopTimer = undefined;
-		await this.stopPromise;
+		if (this.stopPromise) await this.stopPromise;
 		if (this.runtime?.isReady()) {
 			this.runtime.bindUiContext(ctx);
 			if (observer) this.runtime.attachObserver(observer);
@@ -121,16 +122,28 @@ export class AgentQQBotHost {
 		}
 		if (this.startPromise) return this.startPromise;
 		const runtime = new PiAgentQQBotRuntime(this.config);
+		const generation = this.lifecycleGeneration;
 		this.runtime = runtime;
 		if (observer) runtime.attachObserver(observer);
 		const pending = (async () => {
-			const started = await runtime.start(ctx);
-			if (started && this.runtime === runtime) this.runtimeStartedAt = Date.now();
-			if (!started && this.runtime === runtime) {
-				await runtime.stop();
-				this.runtime = undefined;
+			let started: boolean;
+			try {
+				started = await runtime.start(ctx);
+			} catch (error) {
+				if (this.runtime === runtime && this.lifecycleGeneration === generation) {
+					this.runtime = undefined;
+					await runtime.stop();
+				}
+				throw error;
 			}
-			return started;
+			if (this.runtime !== runtime || this.lifecycleGeneration !== generation) return false;
+			if (!started) {
+				this.runtime = undefined;
+				await runtime.stop();
+				return false;
+			}
+			this.runtimeStartedAt = Date.now();
+			return true;
 		})();
 		this.startPromise = pending;
 		try {
@@ -158,10 +171,20 @@ export class AgentQQBotHost {
 		if (this.stopTimer) clearTimeout(this.stopTimer);
 		this.stopTimer = undefined;
 		const runtime = this.runtime;
+		const starting = this.startPromise;
 		this.runtime = undefined;
 		this.runtimeStartedAt = undefined;
-		this.startPromise = undefined;
-		const pending = runtime?.stop() ?? Promise.resolve();
+		this.lifecycleGeneration += 1;
+		const pending = (async () => {
+			if (starting) {
+				try {
+					await starting;
+				} catch {
+					// The caller of start observes the startup error; stop still owns cleanup.
+				}
+			}
+			await runtime?.stop();
+		})();
 		this.stopPromise = pending;
 		try {
 			await pending;

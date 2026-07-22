@@ -24,7 +24,9 @@ export function reduceTerminalEvent(state: TerminalState, event: QQTerminalEvent
 		return { ...state, connection: event.connection, queueSize: event.queueSize, running: event.running };
 	}
 	const text = event.kind === "inbound" ? event.text : event.kind.replaceAll("_", " ");
-	return { ...state, lines: [...state.lines, { kind: event.kind, text, at: event.at }].slice(-historyLimit) };
+	const limit = Math.max(0, Math.floor(historyLimit));
+	const lines = limit === 0 ? [] : [...state.lines, { kind: event.kind, text, at: event.at }].slice(-limit);
+	return { ...state, lines };
 }
 
 export function disposeTerminalState(state: TerminalState): TerminalState {

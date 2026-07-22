@@ -34,3 +34,40 @@ test("reduces runtime state and bounds terminal history", () => {
 	assert.equal(disposed.disposed, true);
 	assert.equal(reduceTerminalEvent(disposed, { kind: "error", stage: "test", message: "ignored", at: 9 }), disposed);
 });
+
+test("reducer treats a zero history limit as no retained transcript", () => {
+	const state = reduceTerminalEvent(initialTerminalState(), {
+		kind: "error",
+		stage: "gateway",
+		message: "offline",
+		at: 1,
+	}, 0);
+	assert.deepEqual(state.lines, []);
+	assert.deepEqual(renderConversationLines(state, 0), []);
+});
+
+test("runtime state updates do not evict existing transcript lines", () => {
+	const withLine = reduceTerminalEvent(initialTerminalState(), {
+		kind: "inbound",
+		messageId: "message-1",
+		channel: "group",
+		senderLabel: "USER",
+		text: "hello",
+		attachmentCount: 0,
+		attachmentKinds: [],
+		fake: false,
+		at: 1,
+	});
+	const updated = reduceTerminalEvent(withLine, {
+		kind: "runtime_state",
+		connection: "error",
+		detail: "offline",
+		queueSize: 4,
+		running: false,
+		activeLabel: "USER",
+		at: 2,
+	});
+	assert.deepEqual(updated.lines, withLine.lines);
+	assert.equal(updated.connection, "error");
+	assert.equal(updated.queueSize, 4);
+});
