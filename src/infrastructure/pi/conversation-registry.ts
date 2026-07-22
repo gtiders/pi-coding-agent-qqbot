@@ -17,12 +17,19 @@ export class ConversationRegistry {
 	private readonly config: PiAgentQQBotConfig;
 	private readonly agentDir: string;
 	private readonly cwd: string;
+	private readonly createSession: () => QQAgentSession;
 	private disposed = false;
 
-	constructor(config: PiAgentQQBotConfig, agentDir: string, cwd: string) {
+	constructor(
+		config: PiAgentQQBotConfig,
+		agentDir: string,
+		cwd: string,
+		createSession: () => QQAgentSession = () => new QQAgentSession(),
+	) {
 		this.config = config;
 		this.agentDir = agentDir;
 		this.cwd = cwd;
+		this.createSession = createSession;
 	}
 
 	async get(msg: QQInboundMessage): Promise<QQAgentSession> {
@@ -30,14 +37,21 @@ export class ConversationRegistry {
 		await this.evictExpired();
 		const key = conversationKey(msg);
 		let entry = this.entries.get(key);
-		if (!entry) {
+		while (!entry) {
 			await this.evictIfNeeded();
-			entry = { key, session: new QQAgentSession(), lastUsedAt: Date.now() };
+			if (this.disposed) throw new Error("QQ conversation registry is disposed");
+			entry = this.entries.get(key);
+			if (entry) break;
+			// Another get() can fill the registry while eviction yields. Recheck
+			// capacity before the synchronous map insertion instead of exceeding it.
+			if (this.entries.size >= this.config.sessions.maxResident) continue;
+			entry = { key, session: this.createSession(), lastUsedAt: Date.now() };
 			this.entries.set(key, entry);
 			const sessionDir = this.config.sessions.mode === "persistent" ? this.sessionDirFor(key) : undefined;
+			const session = entry.session;
 			entry.initializing = (async () => {
 				if (sessionDir) await mkdir(sessionDir, { recursive: true, mode: 0o700 });
-				await entry?.session.init(this.cwd, {
+				await session.init(this.cwd, {
 					...(sessionDir ? { sessionDir } : {}),
 					persistent: this.config.sessions.mode === "persistent",
 					restore: this.config.sessions.restore,
@@ -47,9 +61,14 @@ export class ConversationRegistry {
 		try {
 			await entry.initializing;
 		} catch (err) {
-			if (this.entries.get(key) === entry) this.entries.delete(key);
-			await entry.session.dispose();
+			if (this.entries.get(key) === entry) {
+				this.entries.delete(key);
+				await entry.session.dispose();
+			}
 			throw err;
+		}
+		if (this.disposed || this.entries.get(key) !== entry) {
+			throw new Error("QQ conversation registry is disposed");
 		}
 		entry.initializing = undefined;
 		entry.lastUsedAt = Date.now();
@@ -95,7 +114,7 @@ export class ConversationRegistry {
 		const maxResident = this.config.sessions.maxResident;
 		if (this.entries.size < maxResident) return;
 		const idle = [...this.entries.values()]
-			.filter((entry) => !entry.session.isStreaming())
+			.filter((entry) => !entry.initializing && !entry.session.isStreaming())
 			.sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
 		if (!idle) throw new Error("QQ 会话资源已满，且所有会话都在运行，请稍后重试");
 		this.entries.delete(idle.key);

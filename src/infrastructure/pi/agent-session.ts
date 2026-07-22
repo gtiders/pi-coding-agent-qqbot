@@ -71,6 +71,8 @@ export async function loadResizeImage(): Promise<(
 }
 
 export class QQAgentSession {
+	// biome-ignore lint/suspicious/noExplicitAny: the SDK is dynamically loaded at the infrastructure boundary.
+	private readonly sdkLoader: () => Promise<any>;
 	// biome-ignore lint/suspicious/noExplicitAny: runtime typing comes from the dynamic SDK.
 	private runtime: any;
 	private cwd = "";
@@ -79,6 +81,11 @@ export class QQAgentSession {
 	private restore: "recent" | "new" = "recent";
 	private disposed = false;
 	private outboundDelivery: QQOutboundDeliveryContext | undefined;
+
+	// biome-ignore lint/suspicious/noExplicitAny: allows the dynamic SDK boundary to be exercised with a fake.
+	constructor(sdkLoader: () => Promise<any> = loadPiSdk) {
+		this.sdkLoader = sdkLoader;
+	}
 
 	/** Create the isolated runtime. Throws if the SDK/model cannot be loaded. */
 	async init(
@@ -90,7 +97,7 @@ export class QQAgentSession {
 		this.sessionDir = options.sessionDir;
 		this.persistent = options.persistent !== false;
 		this.restore = options.restore ?? "recent";
-		const sdk = await loadPiSdk();
+		const sdk = await this.sdkLoader();
 		const sessionManager = this.createInitialSessionManager(sdk);
 		const createRuntime = async ({
 			cwd: runtimeCwd,
@@ -153,15 +160,24 @@ export class QQAgentSession {
 			agentDir: sdk.getAgentDir(),
 			sessionManager,
 		});
-		await runtime.session.bindExtensions({});
-		runtime.setRebindSession(async (session: { bindExtensions(options: object): Promise<void> }) => {
-			await session.bindExtensions({});
-		});
-		if (this.disposed) {
-			await runtime.dispose();
-			return;
+		try {
+			await runtime.session.bindExtensions({});
+			runtime.setRebindSession(async (session: { bindExtensions(options: object): Promise<void> }) => {
+				await session.bindExtensions({});
+			});
+			if (this.disposed) {
+				await runtime.dispose();
+				return;
+			}
+			this.runtime = runtime;
+		} catch (error) {
+			try {
+				await runtime.dispose();
+			} catch {
+				// Preserve the initialization error even if cleanup also fails.
+			}
+			throw error;
 		}
-		this.runtime = runtime;
 	}
 
 	isReady(): boolean {
@@ -271,7 +287,7 @@ export class QQAgentSession {
 
 	async listSessions(): Promise<QQSessionInfo[]> {
 		if (!this.persistent || !this.sessionDir) return [];
-		const sdk = await loadPiSdk();
+		const sdk = await this.sdkLoader();
 		const sessions = await sdk.SessionManager.list(this.cwd, this.sessionDir);
 		return sessions as QQSessionInfo[];
 	}
