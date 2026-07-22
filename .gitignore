@@ -4,6 +4,7 @@ node_modules/
 *.log
 *.tgz
 .DS_Store
+.worktrees/
 
 # Real local QQ bot config. Keep only pi-qqbot.json.example in git.
 pi-qqbot.json
