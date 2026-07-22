@@ -12,17 +12,22 @@ export async function resolveSdkUrl(options: SdkResolverOptions): Promise<URL> {
 	const candidates: Array<{ source: string; value?: string | undefined }> = [
 		{ source: "explicit", value: options.explicit?.protocol === "file:" ? options.explicit.pathname : options.explicit?.href },
 	];
-	try {
-		candidates.push({ source: "module", value: await options.resolveModule("@earendil-works/pi-coding-agent") });
-	} catch {
-		// Launcher fallback remains available.
-	}
 	if (options.launcher) {
 		const marker = join("@earendil-works", "pi-coding-agent");
 		const normalized = options.launcher.replaceAll("\\", "/");
 		const index = normalized.lastIndexOf(marker.replaceAll("\\", "/"));
-		if (index >= 0) candidates.push({ source: "launcher", value: join(normalized.slice(0, index), marker, "dist", "index.js") });
-		else candidates.push({ source: "launcher-adjacent", value: join(dirname(options.launcher), "index.js") });
+		if (index >= 0) {
+			candidates.push({ source: "launcher", value: join(normalized.slice(0, index), marker, "dist", "index.js") });
+		} else {
+			const launcherDir = dirname(options.launcher);
+			candidates.push({ source: "launcher-adjacent", value: join(launcherDir, "dist", "index.js") });
+			candidates.push({ source: "launcher-adjacent-legacy", value: join(launcherDir, "index.js") });
+		}
+	}
+	try {
+		candidates.push({ source: "module", value: await options.resolveModule("@earendil-works/pi-coding-agent") });
+	} catch {
+		// A verified launcher candidate may still be available.
 	}
 	for (const candidate of candidates) {
 		if (!candidate.value) continue;

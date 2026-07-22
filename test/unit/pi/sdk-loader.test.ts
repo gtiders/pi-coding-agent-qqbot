@@ -22,7 +22,27 @@ async function withFakeSdk(run: (entry: string, launcher: string) => Promise<voi
 	}
 }
 
-test("resolves a verified SDK module before launcher fallback", async () => {
+test("prefers a packaged host SDK over the extension-local module", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-agent-qqbot-packaged-sdk-"));
+	try {
+		const hostEntry = join(root, "dist", "index.js");
+		const localEntry = join(root, "extension-sdk.js");
+		const launcher = join(root, "pi.exe");
+		await mkdir(join(root, "dist"), { recursive: true });
+		await writeFile(hostEntry, "export const version = 'host';\n");
+		await writeFile(localEntry, "export const version = 'extension';\n");
+		await writeFile(launcher, "");
+		const resolved = await resolveSdkUrl({
+			resolveModule: async () => localEntry,
+			launcher,
+		});
+		assert.equal(resolved.href, pathToFileURL(hostEntry).href);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("uses the verified module when the launcher installation is unavailable", async () => {
 	await withFakeSdk(async (entry) => {
 		const resolved = await resolveSdkUrl({
 			resolveModule: async () => entry,
