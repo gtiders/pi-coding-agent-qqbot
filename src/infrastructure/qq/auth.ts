@@ -62,7 +62,7 @@ export class QQAuth {
 			});
 		} catch (err) {
 			throw new QQAuthError(
-				`token request failed: ${err instanceof Error ? err.message : String(err)}`,
+				`token request failed: ${this.redact(err instanceof Error ? err.message : String(err))}`,
 			);
 		}
 
@@ -74,8 +74,7 @@ export class QQAuth {
 		}
 
 		if (!res.ok || !body.access_token) {
-			// Do not include the secret in the error.
-			const detail = body.message ? `: ${body.message}` : "";
+			const detail = body.message ? `: ${this.redact(body.message)}` : "";
 			throw new QQAuthError(`auth failed (status ${res.status})${detail}`);
 		}
 
@@ -83,5 +82,16 @@ export class QQAuth {
 		this.token = body.access_token;
 		this.expiresAt = Date.now() + expiresInSec * 1000;
 		return this.token;
+	}
+
+	private redact(message: string): string {
+		let redacted = message;
+		const credentials = [...new Set([this.appId, this.clientSecret, this.token])]
+			.filter((credential): credential is string => Boolean(credential))
+			.sort((left, right) => right.length - left.length);
+		for (const credential of credentials) {
+			redacted = redacted.replaceAll(credential, "[redacted]");
+		}
+		return redacted;
 	}
 }

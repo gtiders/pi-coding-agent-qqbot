@@ -4,7 +4,7 @@
  * Protocol reference: QQ 机器人官方文档 - 使用 Websocket 接入
  *   1. GET {base}/gateway -> { url }  (header: Authorization: QQBot {token})
  *   2. Receive OpCode 10 Hello -> { heartbeat_interval }
- *   3. Send OpCode 2 Identify -> { token: "QQBot {access_token}", intents, shard, properties }
+ *   3. Send OpCode 2 Identify with the bot authorization value, intents, shard, and properties
  *      (or OpCode 6 Resume with session_id + seq when reconnecting)
  *   4. Send OpCode 1 Heartbeat every interval, d = last seq (null on first)
  *   5. Receive OpCode 11 Heartbeat ACK
@@ -42,6 +42,24 @@ export interface QQGatewayCallbacks {
 	log: (msg: string) => void;
 }
 
+export interface QQGatewayRuntime {
+	createWebSocket: (url: string) => WebSocket;
+	setInterval: (callback: () => void, delay: number) => ReturnType<typeof setInterval>;
+	clearInterval: (timer: ReturnType<typeof setInterval>) => void;
+	setTimeout: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>;
+	clearTimeout: (timer: ReturnType<typeof setTimeout>) => void;
+	openReadyState: number;
+}
+
+const defaultRuntime: QQGatewayRuntime = {
+	createWebSocket: (url) => new WebSocket(url),
+	setInterval: (callback, delay) => setInterval(callback, delay),
+	clearInterval: (timer) => clearInterval(timer),
+	setTimeout: (callback, delay) => setTimeout(callback, delay),
+	clearTimeout: (timer) => clearTimeout(timer),
+	openReadyState: WebSocket.OPEN,
+};
+
 interface GatewayPayload {
 	op: number;
 	d?: unknown;
@@ -53,6 +71,7 @@ export class QQGateway {
 	private readonly auth: QQAuth;
 	private readonly base: string;
 	private readonly cb: QQGatewayCallbacks;
+	private readonly runtime: QQGatewayRuntime;
 
 	private ws: WebSocket | undefined;
 	private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -63,10 +82,16 @@ export class QQGateway {
 	private reconnectAttempts = 0;
 	private closing = false;
 
-	constructor(auth: QQAuth, opts: { sandbox: boolean }, cb: QQGatewayCallbacks) {
+	constructor(
+		auth: QQAuth,
+		opts: { sandbox: boolean },
+		cb: QQGatewayCallbacks,
+		runtime: QQGatewayRuntime = defaultRuntime,
+	) {
 		this.auth = auth;
 		this.base = opts.sandbox ? SANDBOX_BASE : PROD_BASE;
 		this.cb = cb;
+		this.runtime = runtime;
 	}
 
 	async connect(): Promise<void> {
@@ -112,11 +137,11 @@ export class QQGateway {
 
 	private clearTimers(): void {
 		if (this.heartbeatTimer) {
-			clearInterval(this.heartbeatTimer);
+			this.runtime.clearInterval(this.heartbeatTimer);
 			this.heartbeatTimer = undefined;
 		}
 		if (this.reconnectTimer) {
-			clearTimeout(this.reconnectTimer);
+			this.runtime.clearTimeout(this.reconnectTimer);
 			this.reconnectTimer = undefined;
 		}
 	}
@@ -132,7 +157,7 @@ export class QQGateway {
 			return;
 		}
 
-		const ws = new WebSocket(gatewayUrl);
+		const ws = this.runtime.createWebSocket(gatewayUrl);
 		this.ws = ws;
 
 		ws.on("open", () => {
@@ -187,7 +212,7 @@ export class QQGateway {
 		const delay = this.backoffMs;
 		this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
 		this.cb.log(`reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
-		this.reconnectTimer = setTimeout(() => {
+		this.reconnectTimer = this.runtime.setTimeout(() => {
 			this.reconnectTimer = undefined;
 			void this.openSocket();
 		}, delay);
@@ -245,7 +270,7 @@ export class QQGateway {
 	private onHello(d: { heartbeat_interval?: number } | undefined): void {
 		const interval = d?.heartbeat_interval ?? 45000;
 		this.clearHeartbeat();
-		this.heartbeatTimer = setInterval(() => this.sendHeartbeat(), interval);
+		this.heartbeatTimer = this.runtime.setInterval(() => this.sendHeartbeat(), interval);
 		// Authenticate: resume if we have a session, otherwise identify.
 		if (this.sessionId && this.lastSeq != null) {
 			void this.sendResume();
@@ -256,7 +281,7 @@ export class QQGateway {
 
 	private clearHeartbeat(): void {
 		if (this.heartbeatTimer) {
-			clearInterval(this.heartbeatTimer);
+			this.runtime.clearInterval(this.heartbeatTimer);
 			this.heartbeatTimer = undefined;
 		}
 	}
@@ -368,7 +393,7 @@ export class QQGateway {
 	}
 
 	private send(payload: GatewayPayload): void {
-		if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+		if (this.ws && this.ws.readyState === this.runtime.openReadyState) {
 			try {
 				this.ws.send(JSON.stringify(payload));
 			} catch (err) {
