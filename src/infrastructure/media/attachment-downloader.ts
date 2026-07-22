@@ -35,6 +35,11 @@ export interface AttachmentDownloaderOptions {
 	timeoutMs: number;
 	signal: AbortSignal;
 	onProgress?: ((bytes: number) => void) | undefined;
+	request?: (
+		sourceUrl: string,
+		signal: AbortSignal,
+		maxBytes: number,
+	) => Promise<{ response: IncomingMessage; url: URL }>;
 }
 
 export class AttachmentDownloadError extends Error {
@@ -51,6 +56,7 @@ export class AttachmentDownloader {
 	private readonly timeoutMs: number;
 	private readonly signal: AbortSignal;
 	private readonly onProgress: ((bytes: number) => void) | undefined;
+	private readonly request: NonNullable<AttachmentDownloaderOptions["request"]>;
 	private totalBytes = 0;
 
 	constructor(options: AttachmentDownloaderOptions) {
@@ -58,6 +64,7 @@ export class AttachmentDownloader {
 		this.timeoutMs = options.timeoutMs;
 		this.signal = options.signal;
 		this.onProgress = options.onProgress;
+		this.request = options.request ?? requestWithValidatedRedirects;
 	}
 
 	async download(url: string, maxBytes: number, remainingTotalBytes: number): Promise<DownloadedAttachment> {
@@ -121,7 +128,7 @@ export class AttachmentDownloader {
 		const timeout = setTimeout(() => controller.abort(new Error("download timeout")), this.timeoutMs);
 		let filePath: string | undefined;
 		try {
-			const { response } = await requestWithValidatedRedirects(sourceUrl, controller.signal, maxBytes);
+			const { response } = await this.request(sourceUrl, controller.signal, maxBytes);
 
 			filePath = join(this.workspace, randomUUID());
 			let bytes = 0;
@@ -171,7 +178,7 @@ async function requestWithValidatedRedirects(
 		try {
 			response = await requestPinned(current, signal);
 		} catch (err) {
-			if (signal.aborted) throw err;
+			if (signal.aborted || isAttachmentDownloadError(err)) throw err;
 			throw new AttachmentDownloadError("network_error", `附件下载网络错误：${safeError(err)}`);
 		}
 		const status = response.statusCode ?? 0;
