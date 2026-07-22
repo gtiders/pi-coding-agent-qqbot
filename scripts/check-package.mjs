@@ -6,6 +6,12 @@ import { spawnSync } from "node:child_process";
 
 const root = process.cwd();
 const workspace = await mkdtemp(join(tmpdir(), "pi-agent-qqbot-package-"));
+
+function runNpm(args, options) {
+  const command = process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : "npm";
+  const commandArgs = process.platform === "win32" ? ["/d", "/s", "/c", "npm.cmd", ...args] : args;
+  return spawnSync(command, commandArgs, options);
+}
 try {
   const npmrc = join(workspace, "isolated-npmrc");
   await writeFile(npmrc, "audit=false\nfund=false\n");
@@ -14,8 +20,8 @@ try {
     if (["npm_config_allow_scripts", "npm_config_userconfig"].includes(key.toLowerCase())) delete npmEnv[key];
   }
   npmEnv.NPM_CONFIG_USERCONFIG = npmrc;
-  const packed = spawnSync("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", workspace], { cwd: root, encoding: "utf8", env: npmEnv, shell: process.platform === "win32" });
-  assert.equal(packed.status, 0, packed.stderr || packed.stdout);
+  const packed = runNpm(["pack", "--json", "--ignore-scripts", "--pack-destination", workspace], { cwd: root, encoding: "utf8", env: npmEnv });
+  assert.equal(packed.status, 0, packed.error?.message ?? packed.stderr ?? packed.stdout ?? "npm pack failed");
   const [result] = JSON.parse(packed.stdout);
   const paths = result.files.map((file) => file.path);
   for (const required of ["src/index.ts", "README.md", "LICENSE", "pi-agent-qqbot.json.example"]) assert.ok(paths.includes(required), `missing ${required}`);
@@ -25,10 +31,10 @@ try {
   const consumer = join(workspace, "consumer");
   await import("node:fs/promises").then((fs) => fs.mkdir(consumer));
   await writeFile(join(consumer, "package.json"), "{\"private\":true}\n");
-  const installed = spawnSync("npm", ["install", resolve(workspace, result.filename), "--ignore-scripts", "--legacy-peer-deps"], { cwd: consumer, encoding: "utf8", env: npmEnv, shell: process.platform === "win32" });
-  assert.equal(installed.status, 0, installed.stderr || installed.stdout);
-  const tree = spawnSync("npm", ["ls", "--omit=dev", "--legacy-peer-deps"], { cwd: consumer, encoding: "utf8", env: npmEnv, shell: process.platform === "win32" });
-  assert.equal(tree.status, 0, tree.stderr || tree.stdout);
+  const installed = runNpm(["install", resolve(workspace, result.filename), "--ignore-scripts", "--legacy-peer-deps"], { cwd: consumer, encoding: "utf8", env: npmEnv });
+  assert.equal(installed.status, 0, installed.error?.message ?? installed.stderr ?? installed.stdout ?? "npm install failed");
+  const tree = runNpm(["ls", "--omit=dev", "--legacy-peer-deps"], { cwd: consumer, encoding: "utf8", env: npmEnv });
+  assert.equal(tree.status, 0, tree.error?.message ?? tree.stderr ?? tree.stdout ?? "npm ls failed");
   const metadata = JSON.parse(await readFile(join(consumer, "node_modules", "pi-agent-qqbot", "package.json"), "utf8"));
   assert.deepEqual(Object.keys(metadata.peerDependencies).sort(), ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"]);
   console.log(`package check passed (${paths.length} files)`);

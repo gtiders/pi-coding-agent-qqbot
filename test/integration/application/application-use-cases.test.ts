@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { deliverReply } from "../../../src/application/deliver-reply.ts";
+import { deliverFormattedReply, deliverReply } from "../../../src/application/deliver-reply.ts";
+import { executeRemoteCommand } from "../../../src/application/execute-remote-command.ts";
 import { processInboundMessage } from "../../../src/application/process-inbound-message.ts";
 import { runAgentTurn } from "../../../src/application/run-agent-turn.ts";
 import { MessageDedupe } from "../../../src/domain/message-dedupe.ts";
@@ -82,6 +83,43 @@ test("always closes outbound delivery and prepared attachments", async () => {
 	assert.deepEqual(calls, ["run", "outbound", "attachments"]);
 	assert.equal(cleanupErrors.length, 2);
 	assert.ok(cleanupErrors.every((entry) => entry.primary === primary));
+});
+
+test("dispatches parsed remote commands without adapter dependencies", async () => {
+	const calls: string[] = [];
+	const command = { name: "status", args: [], rawArgs: "" };
+	assert.equal(await executeRemoteCommand(command, { status: () => { calls.push("status"); } }), true);
+	assert.equal(await executeRemoteCommand({ ...command, name: "unknown" }, {}), false);
+	assert.deepEqual(calls, ["status"]);
+});
+
+test("uses a new sequence for plain fallback and continues remaining chunks", async () => {
+	const sent: Array<{ kind: "markdown" | "plain"; text: string; seq: number }> = [];
+	const target: QQReplyTarget = { type: "private", userOpenId: "USER", msgId: "fallback", createdAt: Date.now() };
+	const result = await deliverFormattedReply(
+		{
+			async sendMarkdown(_target, text, seq) {
+				sent.push({ kind: "markdown", text, seq });
+				throw new Error("markdown rejected");
+			},
+			async sendText(_target, text, seq) {
+				sent.push({ kind: "plain", text, seq });
+			},
+		},
+		new ReplyBudget(4),
+		{
+			target,
+			formatted: { markdown: ["md-1", "md-2"], plain: ["plain-1", "plain-2"] },
+			useMarkdown: true,
+			canFallback: () => true,
+		},
+	);
+	assert.deepEqual(result, { delivery: "plain-fallback", sentChunks: 2 });
+	assert.deepEqual(sent, [
+		{ kind: "markdown", text: "md-1", seq: 1 },
+		{ kind: "plain", text: "plain-1", seq: 2 },
+		{ kind: "plain", text: "plain-2", seq: 3 },
+	]);
 });
 
 test("delivers progress and final text from one reply budget", async () => {
