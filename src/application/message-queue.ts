@@ -1,54 +1,42 @@
-/**
- * FIFO queue that serializes complete inbound QQ messages.
- *
- * Pi has a single active session, so QQ conversations are processed one at a
- * time to avoid overlapping turns and misdirected replies. When the queue is
- * full, the newest message is dropped (the caller may send a busy notice).
- */
-
-import type { QQInboundMessage } from "./ports";
+import { conversationKey } from "../domain/conversation.ts";
+import { BoundedMessageQueue } from "../domain/message-queue.ts";
+import type { QQInboundMessage } from "./ports.ts";
 
 export class MessageQueue {
-	private readonly pending: QQInboundMessage[] = [];
-	private readonly maxSize: number;
+	readonly #queue: BoundedMessageQueue<QQInboundMessage>;
 
 	constructor(maxSize: number) {
-		this.maxSize = Math.max(1, maxSize);
+		this.#queue = new BoundedMessageQueue(maxSize);
 	}
 
 	get size(): number {
-		return this.pending.length;
+		return this.#queue.size;
 	}
 
-	/**
-	 * Enqueue a message. Returns true if accepted, false if dropped because the
-	 * queue is full (newest is dropped).
-	 */
-	enqueue(msg: QQInboundMessage): boolean {
-		if (this.pending.length >= this.maxSize) return false;
-		this.pending.push(msg);
-		return true;
+	enqueue(message: QQInboundMessage): boolean {
+		return this.#queue.enqueue({ conversationKey: messageKey(message), message });
 	}
 
 	dequeue(): QQInboundMessage | undefined {
-		return this.pending.shift();
+		return this.#queue.dequeue()?.message;
 	}
 
 	clear(): void {
-		this.pending.length = 0;
+		this.#queue.clear();
 	}
 
-	hasWhere(predicate: (msg: QQInboundMessage) => boolean): boolean {
-		return this.pending.some(predicate);
+	hasConversation(message: QQInboundMessage): boolean {
+		return this.#queue.hasConversation(messageKey(message));
 	}
 
-	removeWhere(predicate: (msg: QQInboundMessage) => boolean): number {
-		let removed = 0;
-		for (let index = this.pending.length - 1; index >= 0; index--) {
-			if (!predicate(this.pending[index])) continue;
-			this.pending.splice(index, 1);
-			removed++;
-		}
-		return removed;
+	removeConversation(message: QQInboundMessage): number {
+		return this.#queue.removeConversation(messageKey(message)).length;
 	}
+}
+
+function messageKey(message: QQInboundMessage): string {
+	return conversationKey({
+		type: message.type,
+		value: message.type === "group" ? message.groupOpenId ?? message.userOpenId : message.userOpenId,
+	});
 }

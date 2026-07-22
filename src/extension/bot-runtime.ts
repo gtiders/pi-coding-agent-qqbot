@@ -18,7 +18,7 @@ import { pathToFileURL } from "node:url";
 
 import { authorizeQQCommand, QQ_COMMAND_NAMES, QQ_REMOTE_BLOCKED_COMMANDS } from "./execute-remote-command";
 import { normalizeCommandText, parseQQCommand, type ParsedQQCommand } from "../presentation/qq/command-parser";
-import { ConversationRegistry, conversationKey } from "../infrastructure/pi/conversation-registry";
+import { ConversationRegistry } from "../infrastructure/pi/conversation-registry";
 import { formatUserFacingAgentError, humanizeSessionPreview } from "../presentation/qq/user-facing-errors";
 
 import { QQAccessRequestStore, type QQAccessRequest } from "../application/access-requests";
@@ -31,6 +31,8 @@ import { QQGateway } from "../infrastructure/qq/gateway";
 import { type QQAgentRunEvent, type QQAgentSession, type QQModelInfo, type QQSessionInfo, type QQToolCall, resolveSdkEntry } from "../infrastructure/pi/agent-session";
 import { buildCommandKeyboard, type QQCommandButton } from "../presentation/qq/keyboard";
 import { MessageQueue } from "../application/message-queue";
+import { MessageDedupe } from "../domain/message-dedupe.ts";
+import { ReplyBudget } from "../domain/reply-budget.ts";
 import { QQOutboundDeliveryContext } from "../infrastructure/media/outbound-media";
 import { formatQQReply, QQ_MAX_REPLY_CHUNKS } from "../presentation/qq/reply-formatter";
 import type {
@@ -75,7 +77,7 @@ export class PiAgentQQBotRuntime {
 	private api?: QQApi;
 	private readonly queue: MessageQueue;
 	private readonly attachmentPipeline: AttachmentPipeline;
-	private readonly seenMessages = new MessageDedupe(2 * 60 * 60 * 1000, 2000);
+	private readonly seenMessages = new MessageDedupe(2 * 60 * 60 * 1000, 2000, { now: () => Date.now() });
 	private readonly accessRequests = new QQAccessRequestStore();
 	private conversations?: ConversationRegistry;
 	private runtimeAbort = new AbortController();
@@ -101,10 +103,8 @@ export class PiAgentQQBotRuntime {
 	private pumpTimer?: ReturnType<typeof setTimeout>;
 	private fakeCounter = 0;
 	private observer?: QQConversationObserver;
-	/** Next passive-reply msg_seq per inbound msg_id (acks and multi-chunk answers share one budget). */
-	private readonly nextMsgSeq = new Map<string, number>();
-	/** msg_ids that already received a slow-task progress ack. */
-	private readonly progressAckSent = new Set<string>();
+	/** One passive-reply budget owns every sequence reservation for an inbound message. */
+	private readonly replyBudgets = new Map<string, ReplyBudget>();
 
 	constructor(config: PiAgentQQBotConfig) {
 		this.config = config;
@@ -438,8 +438,7 @@ export class PiAgentQQBotRuntime {
 			this.activeAttachmentStatus = undefined;
 			this.activeOutboundMediaStatus = undefined;
 			if (this.activeRunAbort === runAbort) this.activeRunAbort = undefined;
-			this.nextMsgSeq.delete(msg.id);
-			this.progressAckSent.delete(msg.id);
+			this.replyBudgets.delete(msg.id);
 			this.emit({ kind: "run_end", messageId: msg.id, at: Date.now() });
 			this.emitRuntimeState();
 			this.schedulePump();
@@ -515,7 +514,7 @@ export class PiAgentQQBotRuntime {
 			return;
 		}
 
-		if (!this.seenMessages.admit(msg.id, msg.receivedAt)) {
+		if (!this.seenMessages.admit(msg.id)) {
 			this.debugLog(`ignored duplicate msg_id=${sanitizeLogValue(msg.id)}`);
 			return;
 		}
@@ -804,13 +803,12 @@ export class PiAgentQQBotRuntime {
 	}
 
 	private hasActiveOrQueuedConversation(msg: QQInboundMessage): boolean {
-		return (this.running && !!this.activeTarget && sameConversation(msg, this.activeTarget)) ||
-			this.queue.hasWhere((queued) => conversationKey(queued) === conversationKey(msg));
+		return (this.running && !!this.activeTarget && sameConversation(msg, this.activeTarget)) || this.queue.hasConversation(msg);
 	}
 
 	private async handleStopCommand(msg: QQInboundMessage): Promise<void> {
 		const qq = this.conversations?.peek(msg);
-		const removed = this.queue.removeWhere((queued) => conversationKey(queued) === conversationKey(msg));
+		const removed = this.queue.removeConversation(msg);
 		const wasRunning = qq?.isStreaming() === true || (this.running && this.activeTarget && sameConversation(msg, this.activeTarget));
 		if (wasRunning) this.activeRunAbort?.abort(new Error("QQ task stopped"));
 		await qq?.abort();
@@ -1018,31 +1016,30 @@ export class PiAgentQQBotRuntime {
 		}
 
 		let sentChunks = 0;
-		let nextMsgSeq = this.nextMsgSeq.get(target.msgId) ?? 1;
-		const usedBefore = nextMsgSeq - 1;
-		const remainingBudget = Math.max(0, QQ_MAX_REPLY_CHUNKS - usedBefore);
-		const maxChunks = Math.min(chunks.length, forcePlain ? Math.min(1, remainingBudget) : remainingBudget);
+		const budget = this.replyBudget(target.msgId);
+		const maxChunks = Math.min(chunks.length, forcePlain ? 1 : chunks.length);
 		let useMarkdown = replyFormat !== "plain";
 		let delivery = useMarkdown ? "markdown" : "plain";
 		for (let i = 0; i < maxChunks; i++) {
 			try {
 				if (!useMarkdown) {
-					await this.api.sendText(target, formatted.plain[i], nextMsgSeq++);
+					const seq = budget.reserve("plain");
+					if (seq === undefined) break;
+					await this.api.sendText(target, formatted.plain[i], seq);
 				} else {
 					const fellBack = await this.sendMarkdownWithFallback(
 						target,
 						formatted.markdown[i],
 						formatted.plain[i],
-						nextMsgSeq,
+						budget,
 						i === maxChunks - 1 ? keyboard : undefined,
 					);
-					nextMsgSeq += fellBack ? 2 : 1;
+					if (fellBack === undefined) break;
 					if (fellBack) {
 						useMarkdown = false;
 						delivery = "plain-fallback";
 					}
 				}
-				this.nextMsgSeq.set(target.msgId, nextMsgSeq);
 				sentChunks++;
 			} catch (err) {
 				const detail = err instanceof QQApiError ? err.message : String(err);
@@ -1074,34 +1071,40 @@ export class PiAgentQQBotRuntime {
 		target: QQReplyTarget,
 		markdown: string,
 		plain: string,
-		msgSeq: number,
+		budget: ReplyBudget,
 		keyboard?: QQKeyboard,
-	): Promise<boolean> {
+	): Promise<boolean | undefined> {
 		if (!this.api) throw new Error("QQ API is not ready");
+		const markdownSeq = budget.reserve("markdown");
+		if (markdownSeq === undefined) return undefined;
 		try {
-			await this.api.sendMarkdown(target, markdown, msgSeq, keyboard);
+			await this.api.sendMarkdown(target, markdown, markdownSeq, keyboard);
 			return false;
 		} catch (err) {
 			if (!(err instanceof QQApiError) || !canFallbackFromMarkdown(err)) throw err;
 			this.debugLog(`markdown rejected; falling back to plain text (status ${err.status}${err.code != null ? `, code ${err.code}` : ""})`);
-			// A rejected HTTP response did not deliver a QQ message. Use the next
-			// sequence number and keep subsequent chunks plain for this reply. The
-			// page navigation command remains in the body as a text fallback.
-			await this.api.sendText(target, plain, msgSeq + 1);
+			const plainSeq = budget.reserve("plain");
+			if (plainSeq === undefined) return undefined;
+			await this.api.sendText(target, plain, plainSeq);
 			return true;
 		}
 	}
 
+	private replyBudget(msgId: string): ReplyBudget {
+		let budget = this.replyBudgets.get(msgId);
+		if (!budget) {
+			budget = new ReplyBudget(QQ_MAX_REPLY_CHUNKS);
+			this.replyBudgets.set(msgId, budget);
+		}
+		return budget;
+	}
+
 	private hasMediaReplyCapacity(msgId: string): boolean {
-		return (this.nextMsgSeq.get(msgId) ?? 1) < QQ_MAX_REPLY_CHUNKS;
+		return this.replyBudget(msgId).remaining > 1;
 	}
 
 	private reserveMediaReplySequence(msgId: string): number | undefined {
-		const next = this.nextMsgSeq.get(msgId) ?? 1;
-		// Keep at least one deterministic plain-text slot for the final acknowledgement.
-		if (next >= QQ_MAX_REPLY_CHUNKS) return undefined;
-		this.nextMsgSeq.set(msgId, next + 1);
-		return next;
+		return this.replyBudget(msgId).reserve("media", { keepFinal: true });
 	}
 
 	private async sendBusyNotice(msg: QQInboundMessage): Promise<void> {
@@ -1114,9 +1117,9 @@ export class PiAgentQQBotRuntime {
 			createdAt: Date.now(),
 		};
 		try {
-			const seq = this.nextMsgSeq.get(msg.id) ?? 1;
+			const seq = this.replyBudget(msg.id).reserve("busy", { once: true, keepFinal: true });
+			if (seq === undefined) return;
 			await this.api.sendText(target, "当前消息较多，请稍后重试。需要中止排队中的任务可发送 /stop。", seq);
-			this.nextMsgSeq.set(msg.id, seq + 1);
 		} catch (err) {
 			this.debugLog(`busy notice failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
@@ -1124,13 +1127,8 @@ export class PiAgentQQBotRuntime {
 
 	private async sendProgressAck(msg: QQInboundMessage): Promise<void> {
 		if (!this.api || msg.fake) return;
-		if (this.progressAckSent.has(msg.id)) return;
-		const used = (this.nextMsgSeq.get(msg.id) ?? 1) - 1;
-		if (used >= QQ_MAX_REPLY_CHUNKS) return;
-		// Reserve seq before awaiting so a concurrent final reply cannot collide.
-		const seq = this.nextMsgSeq.get(msg.id) ?? 1;
-		this.nextMsgSeq.set(msg.id, seq + 1);
-		this.progressAckSent.add(msg.id);
+		const seq = this.replyBudget(msg.id).reserve("progress", { once: true, keepFinal: true });
+		if (seq === undefined) return;
 		const target: QQReplyTarget = {
 			type: msg.type,
 			userOpenId: msg.userOpenId,
@@ -1365,32 +1363,6 @@ function sanitizeSummaryFilename(value: string): string {
 
 function sanitizeLogValue(value: string): string {
 	return value.replace(/[\r\n\t]/g, "_").slice(0, 120);
-}
-
-class MessageDedupe {
-	private readonly entries = new Map<string, number>();
-
-	constructor(
-		private readonly ttlMs: number,
-		private readonly maxEntries: number,
-	) {}
-
-	admit(id: string, now = Date.now()): boolean {
-		for (const [key, expiry] of this.entries) {
-			if (expiry > now) break;
-			this.entries.delete(key);
-		}
-		const existing = this.entries.get(id);
-		if (existing !== undefined && existing > now) return false;
-		this.entries.delete(id);
-		this.entries.set(id, now + this.ttlMs);
-		while (this.entries.size > this.maxEntries) {
-			const oldest = this.entries.keys().next().value as string | undefined;
-			if (oldest === undefined) break;
-			this.entries.delete(oldest);
-		}
-		return true;
-	}
 }
 
 function withQQReplyGuidance(prompt: string): string {

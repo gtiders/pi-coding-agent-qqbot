@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { PiAgentQQBotRuntime } from "./bot-runtime";
@@ -12,7 +12,7 @@ const HOST_SYMBOL = Symbol.for("pi-agent-qqbot.host.v1");
 // Bump this whenever the in-memory runtime contract changes. A reload must not
 // retain a Gateway host created by older router or transport code.
 export const QQBOT_HOST_SCHEMA = 2;
-export const QQBOT_BUILD_ID = createBuildId();
+export const QQBOT_BUILD_ID = createSourceBuildId();
 
 interface GlobalWithQQHost {
 	[HOST_SYMBOL]?: AgentQQBotHost;
@@ -199,16 +199,22 @@ export async function acquireAgentQQBotHost(config: PiAgentQQBotConfig): Promise
 	return host;
 }
 
-function createBuildId(): string {
-	const directory = dirname(fileURLToPath(import.meta.url));
+export function createSourceBuildId(sourceRoot = join(dirname(fileURLToPath(import.meta.url)), "..")): string {
 	const hash = createHash("sha256");
-	const sourceFiles = readdirSync(directory)
-		.filter((filename) => (filename.endsWith(".ts") && !filename.endsWith(".test.ts")) || filename === "package.json")
-		.sort();
-	for (const filename of sourceFiles) {
-		hash.update(filename).update(readFileSync(join(directory, filename)));
+	for (const path of collectSourceFiles(sourceRoot).sort()) {
+		hash.update(relative(sourceRoot, path).replaceAll("\\", "/")).update("\0").update(readFileSync(path));
 	}
-	return `0.4.0-${hash.digest("hex").slice(0, 12)}`;
+	return `src-${hash.digest("hex").slice(0, 16)}`;
+}
+
+function collectSourceFiles(directory: string): string[] {
+	const files: string[] = [];
+	for (const entry of readdirSync(directory, { withFileTypes: true })) {
+		const path = join(directory, entry.name);
+		if (entry.isDirectory()) files.push(...collectSourceFiles(path));
+		else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) files.push(path);
+	}
+	return files;
 }
 
 function fingerprint(config: PiAgentQQBotConfig): string {

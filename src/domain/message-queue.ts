@@ -28,6 +28,14 @@ export class BoundedMessageQueue<T> {
 		return this.#items.shift();
 	}
 
+	hasConversation(key: string): boolean {
+		return this.#items.some((item) => item.conversationKey === key);
+	}
+
+	clear(): void {
+		this.#items.length = 0;
+	}
+
 	removeConversation(key: string): QueuedMessage<T>[] {
 		const removed: Array<QueuedMessage<T>> = [];
 		for (let index = this.#items.length - 1; index >= 0; index -= 1) {
