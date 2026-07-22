@@ -52,7 +52,7 @@
 - 创建：`test/run-all.ts`
 - 移动：根目录六个 `*.test.ts` 到 `test/characterization/`
 
-- [ ] **步骤 1：安装本地开发依赖并规范依赖分类**
+- [x] **步骤 1：安装本地开发依赖并规范依赖分类**
 
 运行：
 
@@ -77,7 +77,7 @@ npm install --save-dev typescript@^5.9.3 tsx@^4.20.6 @types/node@^22.19.0 @types
 }
 ```
 
-- [ ] **步骤 2：创建严格 no-emit TypeScript 配置**
+- [x] **步骤 2：创建严格 no-emit TypeScript 配置**
 
 创建 `tsconfig.json`：
 
@@ -100,7 +100,7 @@ npm install --save-dev typescript@^5.9.3 tsx@^4.20.6 @types/node@^22.19.0 @types
 }
 ```
 
-- [ ] **步骤 3：编写自动发现测试入口的失败自检**
+- [x] **步骤 3：编写自动发现测试入口的失败自检**
 
 先创建嵌套 fixture `test/fixtures/discovery/nested.test.ts`，内容：
 
@@ -119,7 +119,7 @@ node --import tsx test/run-all.ts test/fixtures/discovery
 
 预期：FAIL，因为 `test/run-all.ts` 尚不存在。
 
-- [ ] **步骤 4：实现跨平台、稳定排序的测试入口**
+- [x] **步骤 4：实现跨平台、稳定排序的测试入口**
 
 `test/run-all.ts` 核心实现：
 
@@ -149,7 +149,7 @@ for (const file of files) {
 
 用 PowerShell 执行 `$env:RUN_DISCOVERY_FIXTURE = "1"; node --import tsx test/run-all.ts test/fixtures/discovery`，预期 PASS；随后清除环境变量并删除该临时 fixture。
 
-- [ ] **步骤 5：迁移现有测试并改用 `node:test`**
+- [x] **步骤 5：迁移现有测试并改用 `node:test`**
 
 每个测试改为以下结构，不改变现有断言内容：
 
@@ -166,7 +166,7 @@ test("normalizes existing config behavior", () => {
 
 暂时保留 Windows/WSL 失败断言，任务 2 再以明确原生契约替换。
 
-- [ ] **步骤 6：更新 npm scripts 并验证工具链**
+- [x] **步骤 6：更新 npm scripts 并验证工具链**
 
 ```json
 {
@@ -189,11 +189,11 @@ npm test
 
 预期：typecheck 先暴露真实源码问题；test 只保留已知 Windows 路径失败。
 
-- [ ] **步骤 7：仅修复类型基线，不改变行为**
+- [x] **步骤 7：仅修复类型基线，不改变行为**
 
 为旧根源码补充必要的参数类型、undefined narrowing 和 Node timer 类型，直到 `npm run typecheck` PASS。不得在此步骤重构流程或改变用户文案；任何行为变化留给后续带失败测试的任务。
 
-- [ ] **步骤 8：提交工具链**
+- [x] **步骤 8：提交工具链**
 
 ```powershell
 git add package.json package-lock.json tsconfig.json test
