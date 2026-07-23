@@ -157,7 +157,7 @@ export default function registerExtension(pi: ExtensionAPI): void {
 
 function runtimeConfigFallback(): PiAgentQQBotConfig {
 	return {
-		schemaVersion: 3 as const,
+		schemaVersion: 4 as const,
 		enabled: false,
 		appId: "",
 		clientSecret: "",
@@ -167,7 +167,7 @@ function runtimeConfigFallback(): PiAgentQQBotConfig {
 		link: { conflictPolicy: "ask" as const },
 		replyFormat: "auto" as const,
 		progress: { enabled: false, ackAfterMs: 0 },
-		outboundMedia: { enabled: false, adminsOnly: false, allowPrivate: false, allowGroups: false, allowedRoots: [], images: false, files: false, maxFilesPerTurn: 1, maxImageBytes: 1, maxFileBytes: 1, maxTotalBytes: 1, uploadTimeoutMs: 5000 },
+		outboundMedia: { enabled: false, adminsOnly: false, allowPrivate: false, allowGroups: false, deniedRoots: [], images: false, files: false, maxFilesPerTurn: 1, maxImageBytes: 1, maxFileBytes: 1, maxTotalBytes: 1, uploadTimeoutMs: 5000 },
 		media: { enabled: false, maxAttachments: 1, maxTotalBytes: 1, downloadTimeoutMs: 1000, image: { enabled: false, maxBytes: 1 }, voice: { enabled: false, preferQQAsr: false, maxBytes: 1 }, documents: { enabled: false, allowExtensions: [".txt"], maxTxtBytes: 1, maxPdfBytes: 1, maxDocBytes: 1, maxPdfPages: 1, maxExtractedChars: 1 } },
 		debug: false,
 	};

@@ -282,13 +282,13 @@ export interface OpenedLocalFile {
 
 export interface OpenLocalFileOptions {
   candidate: string;
-  allowedRoots: readonly string[];
+  deniedRoots: readonly string[];
   signal?: AbortSignal;
   beforeReadForTest?: () => Promise<void>;
 }
 ```
 
-实现要求：先 `realpath` + containment；以 `O_RDONLY | O_NOFOLLOW(若可用)` 打开；handle stat 必须为普通文件且 `nlink <= 1`；Linux 可比较 `/proc/self/fd/<fd>`；其他平台比较打开前 path stat、handle stat 和读取后 handle stat；所有路径 finally 关闭 handle。
+实现要求：schema 4 使用默认允许的路径黑名单；先 `realpath` 并拒绝命中 `deniedRoots` 的候选路径；以 `O_RDONLY | O_NOFOLLOW(若可用)` 打开；handle stat 必须为普通文件且 `nlink <= 1`；Linux 可比较 `/proc/self/fd/<fd>`；其他平台比较打开前 path stat、handle stat 和读取后 handle stat；所有路径 finally 关闭 handle。
 
 - [x] **步骤 5：替换旧 WSL characterization assertion 并恢复绿线**
 

@@ -20,7 +20,8 @@ export interface QQOutboundMediaConfig {
 	adminsOnly: boolean;
 	allowPrivate: boolean;
 	allowGroups: boolean;
-	allowedRoots: string[];
+	/** Canonical directory roots that may never be sent to QQ. Empty allows every readable path. */
+	deniedRoots: string[];
 	images: boolean;
 	files: boolean;
 	maxFilesPerTurn: number;
@@ -79,7 +80,7 @@ export interface QQLinkConfig {
 
 export interface PiAgentQQBotConfig {
 	/** Persisted config schema. */
-	schemaVersion: 3;
+	schemaVersion: 4;
 	enabled: boolean;
 	appId: string;
 	clientSecret: string;

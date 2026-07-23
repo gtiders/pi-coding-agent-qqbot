@@ -5,7 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import test from "node:test";
 
 import { normalizeConfig } from "../../src/infrastructure/config/normalize-config";
-import { normalizeInputPath, QQOutboundDeliveryContext, QQOutboundMediaError, resolveAllowedLocalFile } from "../../src/infrastructure/media/outbound-media";
+import { normalizeInputPath, QQOutboundDeliveryContext, QQOutboundMediaError, resolveUnblockedLocalFile } from "../../src/infrastructure/media/outbound-media";
 
 test("uses host-native paths and preserves outbound delivery behavior", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-agent-qqbot-outbound-test-"));
@@ -20,10 +20,10 @@ test("uses host-native paths and preserves outbound delivery behavior", async ()
 		const normalized = normalizeInputPath(windowsLookingPath, root);
 		assert.equal(normalized, expectedNativePath);
 		assert.equal(normalized.replaceAll("\\", "/").includes("/mnt/c/"), false);
-		assert.equal(await resolveAllowedLocalFile(textPath, root, [root]), textPath);
+		assert.equal(await resolveUnblockedLocalFile(textPath, root, []), textPath);
 		await assert.rejects(
-			() => resolveAllowedLocalFile(resolve("package.json"), root, []),
-			(error: unknown) => error instanceof QQOutboundMediaError && error.code === "path_outside_allowed_roots",
+			() => resolveUnblockedLocalFile(textPath, root, [root]),
+			(error: unknown) => error instanceof QQOutboundMediaError && error.code === "path_denied",
 		);
 
 		const uploads: Array<{ fileType: number; dataLength: number }> = [];
@@ -42,7 +42,7 @@ test("uses host-native paths and preserves outbound delivery behavior", async ()
 			appId: "test",
 			clientSecret: "test",
 			allowUsers: ["ADMIN"],
-			outboundMedia: { enabled: true, allowedRoots: [root] },
+			outboundMedia: { enabled: true, deniedRoots: [] },
 		});
 		let nextSeq = 1;
 		const delivery = new QQOutboundDeliveryContext({

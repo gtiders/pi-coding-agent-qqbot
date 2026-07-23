@@ -12,7 +12,7 @@ const OUTBOUND_MEDIA_DEFAULTS: QQOutboundMediaConfig = {
 	adminsOnly: true,
 	allowPrivate: true,
 	allowGroups: false,
-	allowedRoots: [],
+	deniedRoots: [],
 	images: true,
 	files: true,
 	maxFilesPerTurn: 2,
@@ -41,7 +41,7 @@ const MEDIA_DEFAULTS: QQMediaConfig = {
 };
 
 const DEFAULTS: PiAgentQQBotConfig = {
-	schemaVersion: 3,
+	schemaVersion: 4,
 	enabled: false,
 	appId: "",
 	clientSecret: "",
@@ -91,7 +91,7 @@ export function normalizeConfig(parsed: unknown): PiAgentQQBotConfig {
 
 	const config: PiAgentQQBotConfig = {
 		...DEFAULTS,
-		schemaVersion: 3,
+		schemaVersion: 4,
 		enabled: bool(raw.enabled, DEFAULTS.enabled),
 		appId: stringValue(raw.appId, ""),
 		clientSecret: stringValue(raw.clientSecret, ""),
@@ -124,8 +124,8 @@ export function normalizeConfig(parsed: unknown): PiAgentQQBotConfig {
 			adminsOnly: bool(rawOutboundMedia.adminsOnly, OUTBOUND_MEDIA_DEFAULTS.adminsOnly),
 			allowPrivate: bool(rawOutboundMedia.allowPrivate, OUTBOUND_MEDIA_DEFAULTS.allowPrivate),
 			allowGroups: bool(rawOutboundMedia.allowGroups, OUTBOUND_MEDIA_DEFAULTS.allowGroups),
-			allowedRoots: [...new Set(
-				stringArray(rawOutboundMedia.allowedRoots)
+			deniedRoots: [...new Set(
+				stringArray(rawOutboundMedia.deniedRoots)
 					.map((value) => value.trim())
 					.filter(Boolean),
 			)].slice(0, 20),

@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { normalizeConfig, validateEnabled } from "../../src/infrastructure/config/normalize-config";
 
-test("normalizes schema 3 defaults and ignores removed compatibility fields", () => {
+test("normalizes schema 4 defaults and ignores removed compatibility fields", () => {
 	const defaults = normalizeConfig({
 		enabled: true,
 		autoStart: false,
@@ -12,7 +12,7 @@ test("normalizes schema 3 defaults and ignores removed compatibility fields", ()
 		clientSecret: "test",
 		commands: { modelPageSize: 99 },
 	});
-	assert.equal(defaults.schemaVersion, 3);
+	assert.equal(defaults.schemaVersion, 4);
 	assert.equal("startup" in defaults, false);
 	assert.equal("sessions" in defaults, false);
 	assert.equal(defaults.commands.modelPageSize, 6);
@@ -20,6 +20,7 @@ test("normalizes schema 3 defaults and ignores removed compatibility fields", ()
 	assert.equal(defaults.progress.ackAfterMs, 3000);
 	assert.equal(defaults.outboundMedia.enabled, false);
 	assert.equal(defaults.outboundMedia.adminsOnly, true);
+	assert.deepEqual(defaults.outboundMedia.deniedRoots, []);
 	assert.equal(defaults.link.conflictPolicy, "ask");
 
 	const current = normalizeConfig({
@@ -30,7 +31,7 @@ test("normalizes schema 3 defaults and ignores removed compatibility fields", ()
 		startup: { mode: "auto" },
 		commands: { modelPageSize: 0 },
 	});
-	assert.equal(current.schemaVersion, 3);
+	assert.equal(current.schemaVersion, 4);
 	assert.equal("startup" in current, false);
 	assert.equal(current.commands.modelPageSize, 1);
 });
@@ -71,14 +72,16 @@ test("normalizes outbound media limits", () => {
 		clientSecret: "test",
 		outboundMedia: {
 			enabled: true,
-			allowedRoots: [" /tmp/exports ", "", "/tmp/exports"],
+			deniedRoots: [" /private/keys ", "", "/private/keys"],
+			allowedRoots: ["/legacy/is/ignored"],
 			maxFilesPerTurn: 99,
 			maxImageBytes: 999 * 1024 * 1024,
 			uploadTimeoutMs: 1,
 		},
 	});
 	assert.equal(config.outboundMedia.enabled, true);
-	assert.deepEqual(config.outboundMedia.allowedRoots, ["/tmp/exports"]);
+	assert.deepEqual(config.outboundMedia.deniedRoots, ["/private/keys"]);
+	assert.equal("allowedRoots" in config.outboundMedia, false);
 	assert.equal(config.outboundMedia.maxFilesPerTurn, 3);
 	assert.equal(config.outboundMedia.maxImageBytes, 25 * 1024 * 1024);
 	assert.equal(config.outboundMedia.uploadTimeoutMs, 5000);

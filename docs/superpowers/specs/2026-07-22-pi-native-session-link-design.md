@@ -235,6 +235,8 @@ The MVP supports these existing commands against the current native Pi runtime:
 - `/status`
 - `/help`
 
+The QQ command surface remains an explicit allowlist. Interactive commands use QQ Keyboard cards instead of terminal TUI components: `/help` provides the command menu, `/model` provides paginated model selection, `/thinking` provides level selection, and session listing provides `/resume` actions. Every button submits an allowlisted slash command back through the same parser and authorization path; button payloads never bypass command policy.
+
 ### 8.2 Local terminal only
 
 These controls must never be accepted from QQ:
@@ -301,6 +303,10 @@ Configuration exposes:
 {
   "link": {
     "conflictPolicy": "ask"
+  },
+  "outboundMedia": {
+    "enabled": false,
+    "deniedRoots": []
   }
 }
 ```
@@ -346,6 +352,8 @@ The effective MVP configuration is:
 Independent session fields such as mode, scope, restore, resident capacity, and idle disposal are removed from the domain model because QQ no longer owns sessions.
 
 Automatic startup settings are removed from behavior. Unknown legacy fields may be ignored by the config reader, but no code path may use them to auto-start QQ or create QQ session storage.
+
+Outbound local-file paths use a denylist after the outbound feature and sender checks pass. An empty `deniedRoots` allows every regular file readable by the Pi process. A candidate is rejected when its canonical real path is equal to or below a canonical denied root. Symlink/junction resolution, hard-link rejection, open-handle identity checks, rename-race checks, size limits, and reply-budget limits remain mandatory. Legacy `allowedRoots` is ignored by schema 4 and must never be interpreted as a denylist.
 
 ## 13. Error Behavior
 

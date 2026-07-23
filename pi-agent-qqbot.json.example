@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "enabled": false,
   "appId": "YOUR_QQBOT_APP_ID",
   "clientSecret": "YOUR_QQBOT_APP_SECRET",
@@ -29,7 +29,7 @@
     "adminsOnly": true,
     "allowPrivate": true,
     "allowGroups": false,
-    "allowedRoots": [],
+    "deniedRoots": [],
     "images": true,
     "files": true,
     "maxFilesPerTurn": 2,

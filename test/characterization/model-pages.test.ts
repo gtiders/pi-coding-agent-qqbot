@@ -35,6 +35,10 @@ test("builds previous and next model page controls", () => {
 	assert.equal(second.models.length, 2);
 	assert.deepEqual(second.fallbackCommands, ["/model page 1"]);
 	assert.equal(second.keyboardRows.at(-2)?.[0]?.command, "/model page 1");
+
+	const filtered = buildModelPage(models(8), 2, 6, "deepseek chat");
+	assert.equal(filtered.keyboardRows.at(-2)?.[0]?.command, "/model page 1 deepseek chat");
+	assert.deepEqual(filtered.fallbackCommands, ["/model page 1 deepseek chat"]);
 });
 
 test("normalizes page size and rejects invalid pages", () => {

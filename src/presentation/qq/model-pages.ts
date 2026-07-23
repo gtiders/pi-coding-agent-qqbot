@@ -30,7 +30,7 @@ export function normalizeModelPageSize(value: number): number {
 	return Math.min(MAX_MODEL_PAGE_SIZE, Math.max(1, Math.trunc(value)));
 }
 
-export function buildModelPage(models: QQModelInfo[], page: number, pageSize: number): ModelPage {
+export function buildModelPage(models: readonly QQModelInfo[], page: number, pageSize: number, query = ""): ModelPage {
 	const effectivePageSize = normalizeModelPageSize(pageSize);
 	const total = models.length;
 	const totalPages = Math.max(1, Math.ceil(total / effectivePageSize));
@@ -39,7 +39,7 @@ export function buildModelPage(models: QQModelInfo[], page: number, pageSize: nu
 	}
 	const offset = (page - 1) * effectivePageSize;
 	const items = models.slice(offset, offset + effectivePageSize);
-	const keyboardRows = itemsToKeyboardRows(items, page, totalPages);
+	const keyboardRows = itemsToKeyboardRows(items, page, totalPages, query);
 	return {
 		models: items,
 		page,
@@ -48,7 +48,7 @@ export function buildModelPage(models: QQModelInfo[], page: number, pageSize: nu
 		offset,
 		pageSize: effectivePageSize,
 		keyboardRows,
-		fallbackCommands: fallbackCommands(page, totalPages),
+		fallbackCommands: fallbackCommands(page, totalPages, query),
 	};
 }
 
@@ -61,6 +61,7 @@ function itemsToKeyboardRows(
 	models: QQModelInfo[],
 	page: number,
 	totalPages: number,
+	query: string,
 ): QQCommandButton[][] {
 	const rows: QQCommandButton[][] = [];
 	for (let index = 0; index < models.length; index += QQ_KEYBOARD_BUTTONS_PER_ROW) {
@@ -72,17 +73,22 @@ function itemsToKeyboardRows(
 	}
 	if (totalPages > 1) {
 		const navigation: QQCommandButton[] = [];
-		if (page > 1) navigation.push({ label: `上一页 ${page - 1}/${totalPages}`, command: `/model page ${page - 1}` });
-		if (page < totalPages) navigation.push({ label: `下一页 ${page + 1}/${totalPages}`, command: `/model page ${page + 1}` });
+		if (page > 1) navigation.push({ label: `上一页 ${page - 1}/${totalPages}`, command: modelPageCommand(page - 1, query) });
+		if (page < totalPages) navigation.push({ label: `下一页 ${page + 1}/${totalPages}`, command: modelPageCommand(page + 1, query) });
 		if (navigation.length) rows.push(navigation);
 	}
 	rows.push([{ label: "返回帮助", command: "/help" }]);
 	return rows;
 }
 
-function fallbackCommands(page: number, totalPages: number): string[] {
+function fallbackCommands(page: number, totalPages: number, query: string): string[] {
 	const commands: string[] = [];
-	if (page > 1) commands.push(`/model page ${page - 1}`);
-	if (page < totalPages) commands.push(`/model page ${page + 1}`);
+	if (page > 1) commands.push(modelPageCommand(page - 1, query));
+	if (page < totalPages) commands.push(modelPageCommand(page + 1, query));
 	return commands;
+}
+
+function modelPageCommand(page: number, query: string): string {
+	const normalizedQuery = query.trim();
+	return `/model page ${page}${normalizedQuery ? ` ${normalizedQuery}` : ""}`;
 }

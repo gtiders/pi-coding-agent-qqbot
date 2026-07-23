@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, SessionInfo } from "@earendil-works/pi-coding-agent";
 
 import { normalizeConfig } from "../../../src/infrastructure/config/normalize-config.ts";
 import { NativeSessionRuntime, type NativeTransport } from "../../../src/extension/native-session-runtime.ts";
-import type { QQInboundMessage, QQReplyTarget } from "../../../src/application/ports.ts";
+import { PiCommandBridge } from "../../../src/extension/pi-command-bridge.ts";
+import type { QQInboundMessage, QQKeyboard, QQReplyTarget } from "../../../src/application/ports.ts";
 
 const config = normalizeConfig({
 	enabled: true,
@@ -94,9 +95,75 @@ test("QQ input received while Pi is busy is delivered as a native follow-up", as
 	assert.deepEqual(harness.injected[0]?.options, { deliverAs: "followUp" });
 });
 
-function createHarness(idle = true) {
-	const sent: Array<{ target: QQReplyTarget; text: string; sequence: number }> = [];
+test("QQ command whitelist renders help and model selection keyboards", async () => {
+	const models = Array.from({ length: 8 }, (_, index) => ({
+		provider: index < 4 ? "deepseek" : "custom",
+		id: `model-${index + 1}`,
+		name: `Model ${index + 1}`,
+		input: ["text"],
+		reasoning: true,
+	}));
+	const harness = createHarness(true, models, [{
+		id: "session-12345678",
+		path: "C:/sessions/session-12345678.jsonl",
+		name: "Refactor session",
+		cwd: "C:/work",
+		created: new Date(),
+		modified: new Date(),
+		messageCount: 3,
+		firstMessage: "start",
+		allMessagesText: "start refactor",
+	}]);
+	await harness.runtime.start(harness.context);
+	harness.runtime.link(harness.context);
+
+	await harness.runtime.handleInbound(message("qq-help", "/help"));
+	const helpCommands = keyboardCommands(harness.sent.at(-1)?.keyboard);
+	assert.deepEqual(new Set(helpCommands), new Set([
+		"/model", "/thinking", "/sessions", "/status", "/new",
+		"/resume", "/name", "/compact", "/stop", "/help",
+	]));
+
+	await harness.runtime.handleInbound(message("qq-models", "/model"));
+	assert.match(harness.sent.at(-1)?.text ?? "", /可用模型 1\/2/);
+	assert.ok(keyboardCommands(harness.sent.at(-1)?.keyboard).includes("/model page 2"));
+
+	await harness.runtime.handleInbound(message("qq-models-page", "/model page 2"));
+	assert.match(harness.sent.at(-1)?.text ?? "", /可用模型 2\/2/);
+	assert.ok(keyboardCommands(harness.sent.at(-1)?.keyboard).includes("/model custom\/model-7"));
+
+	await harness.runtime.handleInbound(message("qq-sessions", "/sessions"));
+	assert.deepEqual(keyboardCommands(harness.sent.at(-1)?.keyboard), ["/resume 12345678", "/help"]);
+
+	await harness.runtime.handleInbound(message("qq-model-select", "/model deepseek/model-2"));
+	assert.deepEqual(harness.setModels, ["deepseek/model-2"]);
+	assert.match(harness.sent.at(-1)?.text ?? "", /立即生效，无需重启 Pi/);
+
+	await harness.runtime.handleInbound(message("qq-reload", "/reload"));
+	assert.match(harness.sent.at(-1)?.text ?? "", /只能由本机 Pi 终端执行/);
+});
+
+test("thinking command renders level buttons and applies a selected level", async () => {
+	const harness = createHarness();
+	await harness.runtime.start(harness.context);
+	harness.runtime.link(harness.context);
+	await harness.runtime.handleInbound(message("qq-thinking", "/thinking"));
+	assert.ok(keyboardCommands(harness.sent.at(-1)?.keyboard).includes("/thinking xhigh"));
+	await harness.runtime.handleInbound(message("qq-thinking-high", "/thinking high"));
+	assert.deepEqual(harness.setThinkingLevels, ["high"]);
+	assert.match(harness.sent.at(-1)?.text ?? "", /high/);
+});
+
+function createHarness(
+	idle = true,
+	models: Array<Record<string, unknown>> = [],
+	sessions: SessionInfo[] = [],
+) {
+	const sent: Array<{ target: QQReplyTarget; text: string; sequence: number; keyboard?: QQKeyboard }> = [];
 	const injected: Array<{ content: unknown; options: unknown }> = [];
+	const setModels: string[] = [];
+	const setThinkingLevels: string[] = [];
+	let thinkingLevel = "medium";
 	let transports = 0;
 	let runtime!: NativeSessionRuntime;
 	const createTransport = (_config: typeof config, callbacks: { onState(state: "connected"): void }): NativeTransport => {
@@ -109,11 +176,12 @@ function createHarness(idle = true) {
 			},
 			api: {
 				async sendText(target, text, sequence) { sent.push({ target, text, sequence }); },
-				async sendMarkdown(target, text, sequence) { sent.push({ target, text, sequence }); },
+				async sendMarkdown(target, text, sequence, keyboard) { sent.push({ target, text, sequence, ...(keyboard ? { keyboard } : {}) }); },
 			},
 		};
 	};
 	runtime = new NativeSessionRuntime({
+		bridge: new PiCommandBridge(async () => sessions),
 		createTransport: createTransport as never,
 		createOwnership: () => ({
 			async claim() { return {}; },
@@ -132,13 +200,21 @@ function createHarness(idle = true) {
 			const text = (content as Array<{ type: string; text?: string }>).find((part) => part.type === "text")?.text ?? "";
 			runtime.onInput({ type: "input", text, source: "extension" });
 		},
-		getThinkingLevel: () => "medium",
+		getThinkingLevel: () => thinkingLevel,
+		setThinkingLevel(level: string) {
+			thinkingLevel = level;
+			setThinkingLevels.push(level);
+		},
+		async setModel(model: { provider: string; id: string }) {
+			setModels.push(`${model.provider}/${model.id}`);
+			return true;
+		},
 	} as ExtensionAPI;
 	runtime.bindExtension(pi);
 	const context = {
 		cwd: "C:/work",
 		model: { provider: "test", id: "model" },
-		modelRegistry: { getAvailable: () => [] },
+		modelRegistry: { getAvailable: () => models },
 		sessionManager: {
 			getSessionId: () => "native-session-1",
 			getSessionFile: () => "C:/sessions/native-session-1.jsonl",
@@ -149,7 +225,7 @@ function createHarness(idle = true) {
 		hasPendingMessages: () => false,
 	} as unknown as ExtensionCommandContext;
 	runtime.onSessionStart(context);
-	return { runtime, context, pi, sent, injected, transportCount: () => transports };
+	return { runtime, context, pi, sent, injected, setModels, setThinkingLevels, transportCount: () => transports };
 }
 
 function message(id: string, text: string): QQInboundMessage {
@@ -161,4 +237,8 @@ function agentEnd(text: string) {
 		type: "agent_end" as const,
 		messages: [{ role: "assistant" as const, content: [{ type: "text" as const, text }], api: "test", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" as const, timestamp: Date.now() }],
 	};
+}
+
+function keyboardCommands(keyboard?: QQKeyboard): string[] {
+	return keyboard?.content.rows.flatMap((row) => row.buttons.map((button) => button.action.data)) ?? [];
 }

@@ -11,7 +11,7 @@ const nativePath = { isAbsolute, relative, resolve, sep };
 export type LocalFileErrorCode =
 	| "file_not_found"
 	| "path_invalid"
-	| "path_outside_allowed_roots"
+	| "path_denied"
 	| "not_regular_file"
 	| "hardlink_not_allowed"
 	| "empty_file"
@@ -34,7 +34,7 @@ export interface OpenedLocalFile {
 
 export interface OpenLocalFileOptions {
 	candidate: string;
-	allowedRoots: readonly string[];
+	deniedRoots: readonly string[];
 	signal?: AbortSignal;
 	beforeReadForTest?: () => Promise<void>;
 }
@@ -42,11 +42,11 @@ export interface OpenLocalFileOptions {
 export async function openVerifiedLocalFile(options: OpenLocalFileOptions): Promise<OpenedLocalFile> {
 	assertNotAborted(options.signal);
 	const candidate = await canonicalPath(options.candidate);
-	const roots = (await Promise.all(options.allowedRoots.map((root) => realpath(root).catch(() => undefined)))).filter(
+	const roots = (await Promise.all(options.deniedRoots.map((root) => realpath(root).catch(() => undefined)))).filter(
 		(root): root is string => typeof root === "string",
 	);
-	if (!roots.some((root) => isWithinRoot(candidate, root, nativePath))) {
-		throw new LocalFileError("path_outside_allowed_roots", "File is outside allowed roots");
+	if (roots.some((root) => isWithinRoot(candidate, root, nativePath))) {
+		throw new LocalFileError("path_denied", "File is inside a denied root");
 	}
 
 	const before = await stat(candidate).catch((error: unknown) => {

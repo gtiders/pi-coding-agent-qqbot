@@ -9,7 +9,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { deliverFormattedReply } from "../application/deliver-reply.ts";
-import type { PiAgentQQBotConfig, QQInboundMessage, QQReplyTarget } from "../application/ports.ts";
+import type { PiAgentQQBotConfig, QQInboundMessage, QQKeyboard, QQReplyTarget } from "../application/ports.ts";
 import { ReplyBudget } from "../domain/reply-budget.ts";
 import { NativeSessionLinkState, type TurnOrigin } from "../domain/native-session-link.ts";
 import { validateEnabled } from "../infrastructure/config/normalize-config.ts";
@@ -19,6 +19,8 @@ import { QQApi, QQApiError } from "../infrastructure/qq/api.ts";
 import { QQAuth } from "../infrastructure/qq/auth.ts";
 import { QQGateway, type QQGatewayCallbacks } from "../infrastructure/qq/gateway.ts";
 import { normalizeCommandText, parseQQCommand } from "../presentation/qq/command-parser.ts";
+import { buildCommandKeyboard, type QQCommandButton } from "../presentation/qq/keyboard.ts";
+import { buildModelPage, formatModelPageFallback, type ModelPage } from "../presentation/qq/model-pages.ts";
 import { formatQQReply } from "../presentation/qq/reply-formatter.ts";
 import { PiCommandBridge } from "./pi-command-bridge.ts";
 import { GatewayOwnership } from "./gateway-ownership.ts";
@@ -34,6 +36,23 @@ const LOCAL_ONLY_COMMANDS = new Set([
 	"qqbot-link",
 	"qqbot-unlink",
 	"qqbot-takeover",
+	"settings",
+	"scoped-models",
+	"export",
+	"import",
+	"share",
+	"copy",
+	"session",
+	"changelog",
+	"hotkeys",
+	"fork",
+	"clone",
+	"tree",
+	"trust",
+	"login",
+	"logout",
+	"reload",
+	"quit",
 ]);
 const REMOTE_COMMANDS = new Set([
 	"new",
@@ -47,6 +66,20 @@ const REMOTE_COMMANDS = new Set([
 	"status",
 	"help",
 ]);
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const HELP_KEYBOARD_ROWS: QQCommandButton[][] = [
+	[{ label: "选择模型", command: "/model", primary: true }, { label: "思考等级", command: "/thinking" }],
+	[{ label: "历史会话", command: "/sessions" }, { label: "当前状态", command: "/status" }],
+	[{ label: "新建会话", command: "/new" }, { label: "恢复会话", command: "/resume" }],
+	[{ label: "会话命名", command: "/name" }, { label: "压缩上下文", command: "/compact" }],
+	[{ label: "停止当前回合", command: "/stop" }, { label: "刷新菜单", command: "/help" }],
+];
+const BACK_TO_HELP_ROWS: QQCommandButton[][] = [[{ label: "返回命令菜单", command: "/help" }]];
+
+interface RemoteCommandReply {
+	text: string;
+	keyboardRows?: QQCommandButton[][];
+}
 
 export interface GatewayControl {
 	connect(): Promise<void>;
@@ -56,7 +89,7 @@ export interface GatewayControl {
 
 export interface QQReplyApi {
 	sendText(target: QQReplyTarget, content: string, sequence: number): Promise<void>;
-	sendMarkdown(target: QQReplyTarget, content: string, sequence: number): Promise<void>;
+	sendMarkdown(target: QQReplyTarget, content: string, sequence: number, keyboard?: QQKeyboard): Promise<void>;
 }
 
 export interface NativeTransport {
@@ -375,54 +408,126 @@ export class NativeSessionRuntime {
 		}
 		try {
 			const reply = await this.executeRemoteCommand(command.name, command.rawArgs);
-			await this.sendReply(targetFor(message), reply);
+			const rows = reply.keyboardRows ?? BACK_TO_HELP_ROWS;
+			const keyboard = this.requireConfig().commands.buttons
+				? buildCommandKeyboard(message, rows)
+				: undefined;
+			await this.sendReply(targetFor(message), reply.text, new ReplyBudget(4), keyboard);
 		} catch (error) {
 			await this.sendReply(targetFor(message), `命令未执行：${safeError(error)}`);
 		}
 	}
 
-	private async executeRemoteCommand(name: string, args: string): Promise<string> {
+	private async executeRemoteCommand(name: string, args: string): Promise<RemoteCommandReply> {
 		switch (name) {
 			case "new":
 				await this.bridge.newSession(args || undefined);
-				return `已新建当前 Pi 会话${args ? `：${args}` : ""}。`;
-			case "sessions": {
-				const sessions = await this.bridge.listSessions(args);
-				if (!sessions.length) return "没有找到可恢复的 Pi 会话。";
-				return ["当前 Pi 的会话：", ...sessions.slice(0, this.requireConfig().commands.maxListItems).map((entry) => `- ${entry.name ?? "未命名"} (${shortId(entry.id)})`)].join("\n");
-			}
+				return { text: `已新建当前 Pi 会话${args ? `：${args}` : ""}。` };
+			case "sessions":
+				return this.sessionListReply(args);
 			case "resume":
+				if (!args) return this.sessionListReply();
 				await this.bridge.resumeSession(args);
-				return "已恢复指定的 Pi 会话。";
+				return { text: "已恢复指定的 Pi 会话。" };
 			case "name":
+				if (!args.trim()) return { text: "发送 `/name 会话名称` 设置当前 Pi 会话名称。" };
 				this.bridge.setSessionName(args);
-				return `当前 Pi 会话已命名为：${args.trim()}`;
+				return { text: `当前 Pi 会话已命名为：${args.trim()}` };
 			case "compact":
 				await this.bridge.compact(args || undefined);
-				return "当前 Pi 会话已完成压缩。";
-			case "model": {
-				if (!args) {
-					const current = this.bridge.status().model ?? "unknown";
-					const models = this.bridge.listModels().slice(0, this.requireConfig().commands.modelPageSize);
-					return [`当前模型：${current}`, ...models.map((model) => `- ${model.provider}/${model.id}`)].join("\n");
-				}
-				return `已切换模型：${await this.bridge.setModel(args)}`;
-			}
+				return { text: "当前 Pi 会话已完成压缩。" };
+			case "model":
+				return this.modelReply(args);
 			case "thinking":
-				return `当前思考等级：${this.bridge.setThinking(args || undefined)}`;
+				return this.thinkingReply(args);
 			case "stop":
 				this.bridge.stopCurrentTurn();
-				return "已请求停止当前 Pi 回合。";
+				return { text: "已请求停止当前 Pi 回合。" };
 			case "status":
-				return this.statusText();
+				return {
+					text: this.statusText(),
+					keyboardRows: [
+						[{ label: "选择模型", command: "/model", primary: true }, { label: "思考等级", command: "/thinking" }],
+						[{ label: "历史会话", command: "/sessions" }, { label: "返回命令菜单", command: "/help" }],
+					],
+				};
 			case "help":
-				return "可用命令：/new /sessions /resume /name /compact /model /thinking /stop /status /help";
+				return {
+					text: [
+						"QQ 可用命令：",
+						"`/model` 模型  `/thinking` 思考等级",
+						"`/sessions` 会话  `/status` 状态",
+						"`/new` 新建  `/resume` 恢复  `/name` 命名",
+						"`/compact` 压缩  `/stop` 停止  `/help` 帮助",
+					].join("\n"),
+					keyboardRows: HELP_KEYBOARD_ROWS,
+				};
 			default:
 				throw new Error("unsupported command");
 		}
 	}
 
-	private async sendReply(target: QQReplyTarget, text: string, budget = new ReplyBudget(4)): Promise<void> {
+	private async modelReply(args: string): Promise<RemoteCommandReply> {
+		const normalized = args.trim();
+		const pageRequest = parseModelPageRequest(normalized);
+		const query = pageRequest ? pageRequest.query : normalized;
+		const requestedPage = pageRequest?.page ?? 1;
+		const models = this.bridge.listModels(query);
+		if (!pageRequest && normalized) {
+			const exact = models.find((model) => `${model.provider}/${model.id}`.toLowerCase() === normalized.toLowerCase());
+			const selected = exact ?? (models.length === 1 ? models[0] : undefined);
+			if (selected) {
+				const reference = `${selected.provider}/${selected.id}`;
+				const applied = await this.bridge.setModel(reference);
+				return {
+					text: `已切换当前 Pi 会话模型：${applied}\n切换立即生效，无需重启 Pi。`,
+					keyboardRows: [
+						[{ label: "继续选择模型", command: "/model", primary: true }],
+						[{ label: "返回命令菜单", command: "/help" }],
+					],
+				};
+			}
+		}
+		if (!models.length) throw new Error(query || normalized ? "没有匹配的已配置模型" : "当前没有可用模型");
+		const page = buildModelPage(models, requestedPage, this.requireConfig().commands.modelPageSize, query);
+		return {
+			text: formatModelSelection(page, this.bridge.status().model ?? "unknown", query),
+			keyboardRows: page.keyboardRows,
+		};
+	}
+
+	private thinkingReply(args: string): RemoteCommandReply {
+		const normalized = args.trim().toLowerCase();
+		if (normalized && !THINKING_LEVELS.includes(normalized as (typeof THINKING_LEVELS)[number])) {
+			throw new Error(`思考等级无效；可选值：${THINKING_LEVELS.join(", ")}`);
+		}
+		const current = this.bridge.setThinking(normalized || undefined);
+		return {
+			text: normalized ? `当前 Pi 思考等级已切换为：${current}` : `当前 Pi 思考等级：${current}`,
+			keyboardRows: thinkingKeyboardRows(current),
+		};
+	}
+
+	private async sessionListReply(query = ""): Promise<RemoteCommandReply> {
+		const sessions = await this.bridge.listSessions(query);
+		if (!sessions.length) return { text: query ? "没有找到匹配的 Pi 会话。" : "没有找到可恢复的 Pi 会话。" };
+		const visible = sessions.slice(0, this.requireConfig().commands.maxListItems);
+		const keyboardRows = chunkButtons(visible.slice(0, 8).map((entry, index) => ({
+			label: (entry.name?.trim() || `会话 ${index + 1}`).slice(0, 20),
+			command: `/resume ${shortId(entry.id)}`,
+			primary: index === 0,
+		})), 2);
+		keyboardRows.push([{ label: "返回命令菜单", command: "/help" }]);
+		return {
+			text: [
+				query ? `匹配“${query}”的 Pi 会话：` : "可恢复的 Pi 会话：",
+				...visible.map((entry) => `- ${entry.name ?? "未命名"} (${shortId(entry.id)})`),
+			].join("\n"),
+			keyboardRows,
+		};
+	}
+
+	private async sendReply(target: QQReplyTarget, text: string, budget = new ReplyBudget(4), keyboard?: QQKeyboard): Promise<void> {
 		const transport = this.transport;
 		if (!transport) return;
 		const config = this.requireConfig();
@@ -431,6 +536,7 @@ export class NativeSessionRuntime {
 			target,
 			formatted,
 			useMarkdown: config.replyFormat !== "plain",
+			...(keyboard ? { keyboard } : {}),
 			canFallback: (error) => error instanceof QQApiError && error.status >= 400 && error.status < 500,
 		});
 	}
@@ -487,6 +593,38 @@ function extractLastAssistantText(messages: AgentEndEvent["messages"]): string {
 		.map((part) => part.text)
 		.join("")
 		.trim();
+}
+
+function parseModelPageRequest(value: string): { page: number; query: string } | undefined {
+	const match = /^page\s+(\d+)(?:\s+(.+))?$/i.exec(value);
+	if (!match) return undefined;
+	return { page: Number.parseInt(match[1]!, 10), query: match[2]?.trim() ?? "" };
+}
+
+function formatModelSelection(page: ModelPage, current: string, query: string): string {
+	return [
+		`当前模型：${current}`,
+		query ? `匹配“${query}”的模型 ${page.page}/${page.totalPages}：` : `可用模型 ${page.page}/${page.totalPages}：`,
+		...page.models.map((model) => `- ${model.name}（${model.provider}/${model.id}）`),
+		formatModelPageFallback(page),
+	].join("\n");
+}
+
+function thinkingKeyboardRows(current: string): QQCommandButton[][] {
+	const buttons = THINKING_LEVELS.map((level) => ({
+		label: level,
+		command: `/thinking ${level}`,
+		primary: level === current,
+	}));
+	const rows = chunkButtons(buttons, 2);
+	rows.push([{ label: "返回命令菜单", command: "/help" }]);
+	return rows;
+}
+
+function chunkButtons(buttons: QQCommandButton[], size: number): QQCommandButton[][] {
+	const rows: QQCommandButton[][] = [];
+	for (let index = 0; index < buttons.length; index += size) rows.push(buttons.slice(index, index + size));
+	return rows;
 }
 
 function safeError(error: unknown): string {

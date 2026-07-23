@@ -33,6 +33,8 @@ export interface NativeModelInfo {
 	provider: string;
 	id: string;
 	name: string;
+	input: string[];
+	reasoning: boolean;
 }
 
 type SessionLister = (cwd: string, sessionDir?: string) => Promise<SessionInfo[]>;
@@ -127,7 +129,13 @@ export class PiCommandBridge {
 		const needle = query.trim().toLowerCase();
 		return this.requireSessionContext().modelRegistry.getAvailable()
 			.filter((model) => !needle || `${model.provider}/${model.id} ${model.name}`.toLowerCase().includes(needle))
-			.map((model) => ({ provider: model.provider, id: model.id, name: model.name }));
+			.map((model) => ({
+				provider: model.provider,
+				id: model.id,
+				name: model.name,
+				input: [...model.input],
+				reasoning: model.reasoning,
+			}));
 	}
 
 	setThinking(level?: string): string {

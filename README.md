@@ -36,6 +36,8 @@ pi install C:\absolute\path\to\pi-agent-qqbot
 
 真实配置和密钥不能提交到 Git。旧 `startup`、`sessions`、访问审批和管理员字段会被忽略，不能触发自动启动或创建独立 QQ session。
 
+`0.6.0` 将配置升级到 `schemaVersion: 4`。旧 `outboundMedia.allowedRoots` 不再生效；请改用 `outboundMedia.deniedRoots`。空数组表示不禁用任何目录，因此启用本地文件出站后，Pi 进程当前账户可读取的文件默认都可发送。
+
 ### 使用
 
 扩展加载时不会连接 QQ。每次新 Pi 进程都需要在本机终端执行：
@@ -54,7 +56,7 @@ pi install C:\absolute\path\to\pi-agent-qqbot
 - `/qqbot-status` 查看 Gateway、link 和 native Pi session 状态
 - `/qqbot-takeover` 从本机另一个 Pi 进程接管 Gateway
 
-QQ 可用命令：`/help`、`/status`、`/model`、`/thinking`、`/new`、`/sessions`、`/resume`、`/name`、`/compact`、`/stop`。
+QQ 可用命令采用显式白名单：`/help`、`/status`、`/model`、`/thinking`、`/new`、`/sessions`、`/resume`、`/name`、`/compact`、`/stop`。`/help`、`/model`、`/thinking` 和会话选择会发送 QQ Keyboard；不支持按钮时仍可手动发送对应命令。
 
 QQ 不能执行任何 `/qqbot-*` 本地控制命令。Pi 原生 `/new`、`/resume`、`/fork` 和 session switching 会保留 link 并更新到新 session。Terminal 发起的 Agent 回复不会镜像到 QQ。
 
@@ -64,7 +66,8 @@ QQ 不能执行任何 `/qqbot-*` 本地控制命令。Pi 原生 `/new`、`/resum
 - `link.conflictPolicy: "ask"` 会在新 Pi 本地确认；`"takeover"` 会直接请求旧 owner 交接。
 - 接管使用 appId 范围的 owner record、PID、随机 nonce 和 loopback endpoint；不会终止旧 Pi 进程。
 - 入站媒体受 HTTPS、SSRF、重定向、大小和超时限制。
-- 本地文件出站默认关闭，只允许显式 root 内经过 realpath、symlink/junction、hard-link、rename-race 和大小校验的普通文件。
+- 本地文件出站总开关默认关闭；启用后路径采用黑名单策略，默认允许当前 Pi 账户可读取的目录，`outboundMedia.deniedRoots` 中的 root 及其子目录禁止发送。
+- 所有候选文件仍经过 realpath、symlink/junction、hard-link、rename-race、普通文件和大小校验，禁用目录按规范化后的真实路径判定。
 - 模型不能指定 QQ target、`msg_id` 或回复序号。
 
 ## English

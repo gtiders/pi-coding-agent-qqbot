@@ -1,5 +1,4 @@
 import { realpath } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 
 import { QQApi, QQApiError } from "../qq/api";
@@ -83,7 +82,7 @@ export class QQOutboundDeliveryContext {
 			const candidate = normalizeInputPath(inputPath, this.options.cwd);
 			opened = await openVerifiedLocalFile({
 				candidate,
-				allowedRoots: [tmpdir(), ...this.options.config.outboundMedia.allowedRoots],
+				deniedRoots: this.options.config.outboundMedia.deniedRoots.map((root) => normalizeInputPath(root, this.options.cwd)),
 				...(this.options.signal ? { signal: this.options.signal } : {}),
 			});
 			filename = safeFilename(opened.path);
@@ -213,7 +212,7 @@ export class QQOutboundDeliveryContext {
 	}
 }
 
-export async function resolveAllowedLocalFile(input: string, cwd: string, configuredRoots: string[]): Promise<string> {
+export async function resolveUnblockedLocalFile(input: string, cwd: string, deniedRoots: string[]): Promise<string> {
 	const normalized = normalizeInputPath(input, cwd);
 	let candidate: string;
 	try {
@@ -223,20 +222,16 @@ export async function resolveAllowedLocalFile(input: string, cwd: string, config
 		if (code === "ENOENT") throw new QQOutboundMediaError("file_not_found", "本地文件不存在");
 		throw new QQOutboundMediaError("path_invalid", "无法解析本地文件路径");
 	}
-	// Do not trust cwd implicitly: a host can start Pi from a sensitive directory
-	// such as Windows System32. Only OS temp and explicitly configured roots may
-	// cross the QQ data-exfiltration boundary.
-	const rootInputs = [tmpdir(), ...configuredRoots];
 	const roots: string[] = [];
-	for (const rootInput of rootInputs) {
+	for (const rootInput of deniedRoots) {
 		try {
 			roots.push(await realpath(normalizeInputPath(rootInput, cwd)));
 		} catch {
-			// Missing configured roots do not broaden access and are ignored.
+			// A missing denied root cannot contain the already-resolved candidate.
 		}
 	}
-	if (!roots.some((root) => isWithinRoot(candidate, root))) {
-		throw new QQOutboundMediaError("path_outside_allowed_roots", "文件不在允许发送的目录中");
+	if (roots.some((root) => isWithinRoot(candidate, root))) {
+		throw new QQOutboundMediaError("path_denied", "文件位于禁止发送的目录中");
 	}
 	return candidate;
 }
@@ -265,7 +260,7 @@ function localFileMessage(code: LocalFileError["code"]): string {
 	const messages: Record<LocalFileError["code"], string> = {
 		file_not_found: "本地文件不存在",
 		path_invalid: "本地文件路径无效",
-		path_outside_allowed_roots: "文件不在允许发送的目录中",
+		path_denied: "文件位于禁止发送的目录中",
 		not_regular_file: "目标不是普通文件",
 		hardlink_not_allowed: "为避免越权读取，不允许发送硬链接文件",
 		empty_file: "QQ 富媒体不支持空文件",
