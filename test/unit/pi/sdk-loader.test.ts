@@ -5,12 +5,23 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 
-import { loadPiSdk, resolveSdkUrl } from "../../../src/infrastructure/pi/sdk-loader.ts";
+import {
+	loadPiSdk,
+	resolveSdkUrl,
+} from "../../../src/infrastructure/pi/sdk-loader.ts";
 
-async function withFakeSdk(run: (entry: string, launcher: string) => Promise<void>): Promise<void> {
+async function withFakeSdk(
+	run: (entry: string, launcher: string) => Promise<void>,
+): Promise<void> {
 	const root = await mkdtemp(join(tmpdir(), "pi-agent-qqbot-sdk-"));
 	try {
-		const dist = join(root, "node_modules", "@earendil-works", "pi-coding-agent", "dist");
+		const dist = join(
+			root,
+			"node_modules",
+			"@earendil-works",
+			"pi-coding-agent",
+			"dist",
+		);
 		await mkdir(dist, { recursive: true });
 		const entry = join(dist, "index.js");
 		const launcher = join(dist, "cli.js");
@@ -24,7 +35,12 @@ async function withFakeSdk(run: (entry: string, launcher: string) => Promise<voi
 
 test("loads the SDK from the declared Pi host peer", async () => {
 	const sdk = await loadPiSdk();
-	for (const key of ["getAgentDir", "SettingsManager", "AgentSessionRuntime", "createAgentSessionServices"]) {
+	for (const key of [
+		"getAgentDir",
+		"SettingsManager",
+		"AgentSessionRuntime",
+		"createAgentSessionServices",
+	]) {
 		assert.equal(key in sdk, true, `missing host SDK export: ${key}`);
 	}
 });
@@ -73,7 +89,14 @@ test("falls back to a verified Pi launcher installation", async () => {
 
 test("rejects unverified SDK candidates without exposing candidate paths", async () => {
 	await assert.rejects(
-		() => resolveSdkUrl({ explicit: new URL("file:///definitely-missing/pi-sdk.js"), resolveModule: async () => "/also/missing.js" }),
-		(error: unknown) => error instanceof Error && /explicit, module/.test(error.message) && !error.message.includes("definitely-missing"),
+		() =>
+			resolveSdkUrl({
+				explicit: new URL("file:///definitely-missing/pi-sdk.js"),
+				resolveModule: async () => "/also/missing.js",
+			}),
+		(error: unknown) =>
+			error instanceof Error &&
+			/explicit, module/.test(error.message) &&
+			!error.message.includes("definitely-missing"),
 	);
 });
