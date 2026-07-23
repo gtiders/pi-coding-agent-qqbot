@@ -184,7 +184,7 @@ export class QQOutboundDeliveryContext {
 		if (this.options.message.type === "group" && !policy.allowGroups) {
 			throw new QQOutboundMediaError("outbound_group_disabled", "群聊文件发送已关闭");
 		}
-		if (policy.adminsOnly && !this.options.config.commands.admins.includes(this.options.message.userOpenId)) {
+		if (policy.adminsOnly && this.options.message.userOpenId !== this.options.config.allowUsers?.[0]) {
 			throw new QQOutboundMediaError("outbound_not_authorized", "只有显式配置的 QQ 管理员可以发送电脑文件");
 		}
 	}

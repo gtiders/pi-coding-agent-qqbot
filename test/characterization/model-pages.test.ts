@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildModelPage, MAX_MODEL_PAGE_SIZE, normalizeModelPageSize } from "../../src/presentation/qq/model-pages";
-import type { QQModelInfo } from "../../src/infrastructure/pi/agent-session";
+import { buildModelPage, MAX_MODEL_PAGE_SIZE, normalizeModelPageSize, type QQModelInfo } from "../../src/presentation/qq/model-pages";
 
 function models(count: number): QQModelInfo[] {
 	return Array.from({ length: count }, (_, index) => ({

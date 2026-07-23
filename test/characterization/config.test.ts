@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeConfig } from "../../src/infrastructure/config/normalize-config";
+import { normalizeConfig, validateEnabled } from "../../src/infrastructure/config/normalize-config";
 
 test("normalizes schema 3 defaults and ignores removed compatibility fields", () => {
 	const defaults = normalizeConfig({
@@ -13,13 +13,14 @@ test("normalizes schema 3 defaults and ignores removed compatibility fields", ()
 		commands: { modelPageSize: 99 },
 	});
 	assert.equal(defaults.schemaVersion, 3);
-	assert.equal(defaults.startup.mode, "auto");
-	assert.equal(defaults.commands.enabled, true);
+	assert.equal("startup" in defaults, false);
+	assert.equal("sessions" in defaults, false);
 	assert.equal(defaults.commands.modelPageSize, 6);
 	assert.equal(defaults.progress.enabled, true);
 	assert.equal(defaults.progress.ackAfterMs, 3000);
 	assert.equal(defaults.outboundMedia.enabled, false);
 	assert.equal(defaults.outboundMedia.adminsOnly, true);
+	assert.equal(defaults.link.conflictPolicy, "ask");
 
 	const current = normalizeConfig({
 		schemaVersion: 1,
@@ -30,8 +31,26 @@ test("normalizes schema 3 defaults and ignores removed compatibility fields", ()
 		commands: { modelPageSize: 0 },
 	});
 	assert.equal(current.schemaVersion, 3);
-	assert.equal(current.startup.mode, "auto");
+	assert.equal("startup" in current, false);
 	assert.equal(current.commands.modelPageSize, 1);
+});
+
+test("requires exactly one C2C user and rejects group configuration", () => {
+	const valid = normalizeConfig({
+		enabled: true,
+		appId: "test",
+		clientSecret: "secret",
+		allowUsers: ["USER-1"],
+		allowGroups: [],
+		commands: { allowInGroups: false },
+		link: { conflictPolicy: "takeover" },
+	});
+	assert.equal(validateEnabled(valid), undefined);
+	assert.equal(valid.link.conflictPolicy, "takeover");
+	assert.match(validateEnabled(normalizeConfig({ ...valid, allowUsers: [] })) ?? "", /exactly one/);
+	assert.match(validateEnabled(normalizeConfig({ ...valid, allowUsers: ["A", "B"] })) ?? "", /exactly one/);
+	assert.match(validateEnabled(normalizeConfig({ ...valid, allowGroups: ["GROUP"] })) ?? "", /allowGroups/);
+	assert.match(validateEnabled(normalizeConfig({ ...valid, commands: { ...valid.commands, allowInGroups: true } })) ?? "", /allowInGroups/);
 });
 
 test("normalizes progress settings", () => {

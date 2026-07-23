@@ -1,5 +1,12 @@
-import type { QQModelInfo } from "../../infrastructure/pi/agent-session";
 import type { QQCommandButton } from "./keyboard";
+
+export interface QQModelInfo {
+	provider: string;
+	id: string;
+	name: string;
+	input: string[];
+	reasoning: boolean;
+}
 
 export const QQ_KEYBOARD_MAX_ROWS = 5;
 export const QQ_KEYBOARD_BUTTONS_PER_ROW = 2;

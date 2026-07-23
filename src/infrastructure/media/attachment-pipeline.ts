@@ -1,5 +1,6 @@
 import { extname } from "node:path";
 import { readFile } from "node:fs/promises";
+import { resizeImage } from "@earendil-works/pi-coding-agent";
 
 import {
 	AttachmentDownloadError,
@@ -8,7 +9,6 @@ import {
 	type DownloadedAttachment,
 } from "./attachment-downloader";
 import { AttachmentExtractError, extractPdf, extractTxt } from "./document-extractors";
-import { loadResizeImage } from "../pi/agent-session";
 import { SttError, transcribeOpenAI } from "./stt";
 import type {
 	PiAgentQQBotConfig,
@@ -157,7 +157,6 @@ export class AttachmentPipeline {
 		const downloaded = await downloader.download(attachment.url, this.config.media.image.maxBytes, remainingBytes);
 		if (downloaded.media.kind !== "image") throw rejected("mime_mismatch", "附件内容不是受支持的 JPEG/PNG/GIF 图片");
 		const bytes = await readFile(downloaded.path);
-		const resizeImage = await loadResizeImage();
 		const resized = await resizeImage(bytes, downloaded.media.mimeType);
 		if (!resized) throw rejected("image_conversion_failed", "图片转换失败或无法压缩到模型限制内");
 		images.push({ type: "image", data: resized.data, mimeType: resized.mimeType });

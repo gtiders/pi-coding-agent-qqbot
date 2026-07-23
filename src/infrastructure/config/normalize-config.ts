@@ -52,27 +52,13 @@ const DEFAULTS: PiAgentQQBotConfig = {
 	maxQueueSize: 20,
 	sendBusyNotice: false,
 	commands: {
-		enabled: true,
-		accessRequests: true,
 		allowInGroups: false,
-		admins: [],
 		buttons: true,
 		maxListItems: 5,
 		modelPageSize: 6,
-		selectionTtlMs: 300_000,
-		confirmationTtlMs: 120_000,
 	},
-	sessions: {
-		mode: "persistent",
-		scope: "conversation",
-		restore: "recent",
-		maxResident: 8,
-		idleDisposeMs: 1_800_000,
-	},
-	startup: {
-		mode: "auto",
-		keepAcrossLocalSessions: true,
-		handoffGraceMs: 10_000,
+	link: {
+		conflictPolicy: "ask",
 	},
 	showProcess: false,
 	replyFormat: "auto",
@@ -91,32 +77,6 @@ export interface LoadConfigResult {
 	parseError?: string;
 }
 
-export function addAccessUser(
-	raw: Record<string, unknown>,
-	userOpenId: string,
-	role: "user" | "admin",
-): Record<string, unknown> {
-	const normalizedOpenId = userOpenId.trim();
-	if (!normalizedOpenId || normalizedOpenId.length > 256 || /[\u0000-\u001f\u007f]/.test(normalizedOpenId)) {
-		throw new Error("invalid QQ user openid");
-	}
-	const next = structuredClone(raw);
-	next.allowUsers = appendUniqueString(next.allowUsers, normalizedOpenId);
-	const commands = isRecord(next.commands) ? { ...next.commands } : {};
-	if (role === "admin") commands.admins = appendUniqueString(commands.admins, normalizedOpenId);
-	next.commands = commands;
-	return next;
-}
-
-export function removeAccessUser(raw: Record<string, unknown>, userOpenId: string): Record<string, unknown> {
-	const next = structuredClone(raw);
-	next.allowUsers = stringArray(next.allowUsers).filter((value) => value !== userOpenId);
-	const commands = isRecord(next.commands) ? { ...next.commands } : {};
-	commands.admins = stringArray(commands.admins).filter((value) => value !== userOpenId);
-	next.commands = commands;
-	return next;
-}
-
 export function normalizeConfig(parsed: unknown): PiAgentQQBotConfig {
 	const raw = isRecord(parsed) ? parsed : {};
 	const rawMedia = isRecord(raw.media) ? raw.media : {};
@@ -126,47 +86,31 @@ export function normalizeConfig(parsed: unknown): PiAgentQQBotConfig {
 	const rawDocuments = isRecord(rawMedia.documents) ? rawMedia.documents : {};
 	const rawStt = isRecord(rawVoice.stt) ? rawVoice.stt : undefined;
 	const rawCommands = isRecord(raw.commands) ? raw.commands : {};
-	const rawSessions = isRecord(raw.sessions) ? raw.sessions : {};
-	const rawStartup = isRecord(raw.startup) ? raw.startup : {};
+	const rawLink = isRecord(raw.link) ? raw.link : {};
 	const rawProgress = isRecord(raw.progress) ? raw.progress : {};
 
 	const config: PiAgentQQBotConfig = {
 		...DEFAULTS,
-		...raw,
 		schemaVersion: 3,
 		enabled: bool(raw.enabled, DEFAULTS.enabled),
 		appId: stringValue(raw.appId, ""),
 		clientSecret: stringValue(raw.clientSecret, ""),
 		sandbox: bool(raw.sandbox, true),
-		allowUsers: stringArray(raw.allowUsers),
-		allowGroups: stringArray(raw.allowGroups),
+		allowUsers: stringArray(raw.allowUsers).map((value) => value.trim()),
+		allowGroups: stringArray(raw.allowGroups).map((value) => value.trim()),
 		replyPrefix: stringValue(raw.replyPrefix, ""),
 		maxQueueSize: integer(raw.maxQueueSize, 20, 1, 1000),
 		sendBusyNotice: bool(raw.sendBusyNotice, false),
 		commands: {
-			enabled: bool(rawCommands.enabled, DEFAULTS.commands.enabled),
-			accessRequests: bool(rawCommands.accessRequests, true),
 			allowInGroups: bool(rawCommands.allowInGroups, false),
-			admins: stringArray(rawCommands.admins),
 			buttons: bool(rawCommands.buttons, true),
 			maxListItems: integer(rawCommands.maxListItems, 5, 1, 10),
 			// QQ keyboards permit at most five rows. Six models use three rows,
 			// leaving room for page navigation and the help action.
 			modelPageSize: integer(rawCommands.modelPageSize, 6, 1, 6),
-			selectionTtlMs: integer(rawCommands.selectionTtlMs, 300_000, 30_000, 900_000),
-			confirmationTtlMs: integer(rawCommands.confirmationTtlMs, 120_000, 30_000, 300_000),
 		},
-		sessions: {
-			mode: rawSessions.mode === "memory" ? "memory" : "persistent",
-			scope: "conversation",
-			restore: rawSessions.restore === "new" ? "new" : "recent",
-			maxResident: integer(rawSessions.maxResident, 8, 1, 32),
-			idleDisposeMs: integer(rawSessions.idleDisposeMs, 1_800_000, 60_000, 86_400_000),
-		},
-		startup: {
-			mode: rawStartup.mode === "manual" || rawStartup.mode === "service" ? rawStartup.mode : "auto",
-			keepAcrossLocalSessions: bool(rawStartup.keepAcrossLocalSessions, true),
-			handoffGraceMs: integer(rawStartup.handoffGraceMs, 10_000, 1000, 60_000),
+		link: {
+			conflictPolicy: rawLink.conflictPolicy === "takeover" ? "takeover" : "ask",
 		},
 		showProcess: bool(raw.showProcess, false),
 		replyFormat: raw.replyFormat === "plain" ? "plain" : "auto",
@@ -261,10 +205,6 @@ function stringArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
-function appendUniqueString(value: unknown, item: string): string[] {
-	return [...new Set([...stringArray(value), item])];
-}
-
 function integer(value: unknown, fallback: number, min: number, max: number): number {
 	const n = typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : fallback;
 	return Math.min(max, Math.max(min, n));
@@ -272,8 +212,11 @@ function integer(value: unknown, fallback: number, min: number, max: number): nu
 
 /** Returns an error string if an enabled config is missing required fields. */
 export function validateEnabled(config: PiAgentQQBotConfig): string | undefined {
-	if (!config.appId) return "missing appId";
-	if (!config.clientSecret) return "missing clientSecret";
+	if (!config.appId.trim()) return "missing appId";
+	if (!config.clientSecret.trim()) return "missing clientSecret";
+	if (config.allowUsers?.length !== 1 || !config.allowUsers[0]?.trim()) return "allowUsers must contain exactly one non-empty OpenID";
+	if ((config.allowGroups?.length ?? 0) !== 0) return "allowGroups must be empty";
+	if (config.commands.allowInGroups) return "commands.allowInGroups must be false";
 	const stt = config.media.voice.stt;
 	if (stt && (!stt.baseUrl || !stt.model || !stt.apiKeyEnv)) return "invalid media.voice.stt configuration";
 	return undefined;

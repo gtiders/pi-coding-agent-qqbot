@@ -41,7 +41,7 @@ test("uses host-native paths and preserves outbound delivery behavior", async ()
 			enabled: true,
 			appId: "test",
 			clientSecret: "test",
-			commands: { admins: ["ADMIN"] },
+			allowUsers: ["ADMIN"],
 			outboundMedia: { enabled: true, allowedRoots: [root] },
 		});
 		let nextSeq = 1;

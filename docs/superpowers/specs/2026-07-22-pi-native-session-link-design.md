@@ -43,6 +43,12 @@ Test required behavior and important ownership boundaries. Do not build a combin
 
 Delete tests whose only purpose was the removed independent QQ session architecture. Keep existing transport, media, platform, packaging, and identity tests where the behavior remains in scope.
 
+### 2.5 Pi core change approval
+
+The implementation must use the public Pi 0.81.1 extension contract by default.
+
+If any required behavior would need a change to `@earendil-works/pi-coding-agent` internals, a patch to installed Pi files, or reliance on a non-public Pi API, implementation must stop at that boundary. The implementer must explain the missing public capability, the proposed Pi-side change, its compatibility impact, and available alternatives, then wait for explicit approval before modifying Pi core.
+
 ## 3. Scope
 
 ### 3.1 In scope
