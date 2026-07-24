@@ -1,7 +1,5 @@
 import { Buffer } from "node:buffer";
 
-import type { QQReplyFormat } from "../../application/ports";
-
 /**
  * Conservative budget below QQ's observed transport limits. UTF-8 bytes are
  * used because CJK text consumes more than one byte per JavaScript character.
@@ -18,7 +16,7 @@ export interface FormattedQQReply {
 	truncated: boolean;
 }
 
-export function formatQQReply(text: string, mode: QQReplyFormat): FormattedQQReply {
+export function formatQQReply(text: string): FormattedQQReply {
 	const normalized = normalizeMarkdown(text);
 	const source = truncateUtf8(normalized, MAX_SOURCE_BYTES);
 	const markdownChunks = chunkMarkdown(
@@ -30,7 +28,7 @@ export function formatQQReply(text: string, mode: QQReplyFormat): FormattedQQRep
 	// Derive fallback per Markdown chunk so msg_seq and part boundaries stay aligned.
 	const plain = withPartLabels(markdownChunks.map(markdownToPlain), false);
 	return {
-		markdown: mode === "plain" ? plain : markdown,
+		markdown,
 		plain,
 		truncated: source.truncated,
 	};
@@ -100,23 +98,6 @@ export function chunkMarkdown(text: string, maxBytes: number, maxChunks: number)
 		chunks[lastIndex] = appendWithinBudget(chunks[lastIndex]!, "\n\n> ⚠️ 回复过长，后续内容已省略。", maxBytes);
 	}
 	return chunks.slice(0, maxChunks);
-}
-
-export function chunkPlainText(text: string, maxBytes: number, maxChunks: number): string[] {
-	if (utf8Bytes(text) <= maxBytes) return [text];
-	const pieces = splitSemantic(text, maxBytes);
-	const chunks: string[] = [];
-	for (const piece of pieces) {
-		if (chunks.length >= maxChunks) break;
-		const last = chunks[chunks.length - 1];
-		if (last && utf8Bytes(`${last}\n\n${piece}`) <= maxBytes) chunks[chunks.length - 1] = `${last}\n\n${piece}`;
-		else chunks.push(piece);
-	}
-	if (chunks.reduce((total, chunk) => total + utf8Bytes(chunk), 0) < utf8Bytes(text) && chunks.length) {
-		const lastIndex = chunks.length - 1;
-		chunks[lastIndex] = appendWithinBudget(chunks[lastIndex]!, "\n\n⚠️ 回复过长，后续内容已省略。", maxBytes);
-	}
-	return chunks;
 }
 
 export function markdownToPlain(markdown: string): string {

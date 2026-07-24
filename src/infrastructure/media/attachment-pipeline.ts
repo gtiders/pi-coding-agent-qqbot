@@ -7,17 +7,18 @@ import {
 	AttachmentDownloader,
 	safeOriginalFilename,
 	type DownloadedAttachment,
-} from "./attachment-downloader";
-import { AttachmentExtractError, extractPdf, extractTxt } from "./document-extractors";
-import { SttError, transcribeOpenAI } from "./stt";
+} from "./attachment-downloader.ts";
+import { AttachmentExtractError, extractPdf, extractTxt } from "./document-extractors.ts";
+import { SttError, transcribeOpenAI } from "./stt.ts";
 import type {
 	PiAgentQQBotConfig,
-	QQImageContent,
 	PreparedAttachment,
 	PreparedQQMessage,
 	QQAttachment,
+	QQImageContent,
 	QQInboundMessage,
-} from "../../application/ports";
+	QQMediaKind,
+} from "../../application/ports.ts";
 
 export interface AttachmentPipelineCallbacks {
 	onStart?(index: number, total: number, kind: string, filename: string): void;
@@ -25,117 +26,89 @@ export interface AttachmentPipelineCallbacks {
 	onEnd?(index: number, total: number, resource: PreparedAttachment, bytes?: number): void;
 }
 
-export class AttachmentPipeline {
-	private readonly runtimeId: string;
-	private readonly config: PiAgentQQBotConfig;
+export interface AttachmentPreparationOptions {
+	acceptsImages: boolean;
+	/** Dynamic aggregate text budget derived from the active Pi model context. */
+	textBudgetChars: number;
+}
 
-	constructor(config: PiAgentQQBotConfig, runtimeId: string) {
-		this.config = config;
-		this.runtimeId = runtimeId;
-	}
+export class AttachmentPipeline {
+	constructor(
+		private readonly config: PiAgentQQBotConfig,
+		private readonly runtimeId: string,
+	) {}
 
 	async prepare(
 		msg: QQInboundMessage,
 		signal: AbortSignal,
 		callbacks: AttachmentPipelineCallbacks = {},
+		options: AttachmentPreparationOptions = { acceptsImages: true, textBudgetChars: 64_000 },
 	): Promise<PreparedQQMessage> {
-		const media = this.config.media;
-		const accepted = msg.attachments.slice(0, media.maxAttachments);
-		const overflow = msg.attachments.slice(media.maxAttachments);
 		const resources: PreparedAttachment[] = [];
 		const images: QQImageContent[] = [];
 		const fragments: string[] = [];
+		const textBudget = { remaining: Math.max(0, Math.trunc(options.textBudgetChars)) };
 		let activeIndex = 0;
-		let activeKind = "unknown";
+		let activeKind = "file";
 		let activeFilename = "attachment";
 		const downloader = new AttachmentDownloader({
 			runtimeId: this.runtimeId,
 			messageId: msg.id,
-			timeoutMs: msg.type === "group" ? Math.min(media.downloadTimeoutMs, 90_000) : media.downloadTimeoutMs,
 			signal,
 			onProgress: (bytes) => callbacks.onProgress?.(activeIndex, msg.attachments.length, activeKind, activeFilename, bytes),
 		});
 
 		try {
-			if (!media.enabled) {
-				for (let index = 0; index < msg.attachments.length; index++) {
-					const resource = unsupported(msg.attachments[index]!, "附件处理已关闭", "media_disabled");
-					resources.push(resource);
-					fragments.push(failureFragment(resource));
-					callbacks.onEnd?.(index + 1, msg.attachments.length, resource);
-				}
-				return makePrepared(msg, images, resources, fragments, () => downloader.cleanup());
-			}
-
-			for (let index = 0; index < accepted.length; index++) {
+			for (let index = 0; index < msg.attachments.length; index++) {
 				if (signal.aborted) throw signal.reason;
-				const attachment = accepted[index]!;
+				const attachment = msg.attachments[index]!;
 				activeIndex = index + 1;
 				activeKind = classifyAttachment(attachment);
 				activeFilename = safeOriginalFilename(attachment.filename);
 				callbacks.onStart?.(activeIndex, msg.attachments.length, activeKind, activeFilename);
-				const resource = await this.prepareOne(
-					attachment,
-					downloader,
-					media.maxTotalBytes - downloader.downloadedBytes,
-					signal,
-					images,
-					fragments,
-				);
+				const resource = await this.prepareOne(attachment, downloader, signal, images, fragments, textBudget, options.acceptsImages);
 				resources.push(resource);
-				callbacks.onEnd?.(activeIndex, msg.attachments.length, resource, downloader.downloadedBytes);
-			}
-
-			for (const attachment of overflow) {
-				const resource = unsupported(
-					attachment,
-					`每条消息最多处理 ${media.maxAttachments} 个附件`,
-					"attachment_count_limit",
-				);
-				resources.push(resource);
-				fragments.push(failureFragment(resource));
-				callbacks.onEnd?.(resources.length, msg.attachments.length, resource, downloader.downloadedBytes);
+				callbacks.onEnd?.(activeIndex, msg.attachments.length, resource);
 			}
 			return makePrepared(msg, images, resources, fragments, () => downloader.cleanup());
-		} catch (err) {
+		} catch (error) {
 			await downloader.cleanup();
-			throw err;
+			throw error;
 		}
 	}
 
 	private async prepareOne(
 		attachment: QQAttachment,
 		downloader: AttachmentDownloader,
-		remainingBytes: number,
 		signal: AbortSignal,
 		images: QQImageContent[],
 		fragments: string[],
+		textBudget: { remaining: number },
+		acceptsImages: boolean,
 	): Promise<PreparedAttachment> {
-		const kind = classifyAttachment(attachment);
+		const declaredKind = mediaKind(attachment);
 		const filename = safeOriginalFilename(attachment.filename);
+		const extension = extname(filename).toLowerCase();
+		if (this.config.inboundMedia.deniedKinds.includes(declaredKind)) {
+			return rejectedResource(filename, declaredKind, "kind_denied", `已禁止接收 ${declaredKind} 类型附件`, fragments);
+		}
+		if (extension && this.config.inboundMedia.deniedExtensions.includes(extension)) {
+			return rejectedResource(filename, declaredKind, "extension_denied", `已禁止接收 ${extension} 文件`, fragments);
+		}
+
 		try {
-			switch (kind) {
-				case "image":
-					return await this.prepareImage(attachment, filename, downloader, remainingBytes, images, fragments);
-				case "voice":
-					return await this.prepareVoice(attachment, filename, downloader, remainingBytes, signal, fragments);
-				case "document":
-					return await this.prepareDocument(attachment, filename, downloader, remainingBytes, fragments);
-				default: {
-					const resource = unsupported(attachment, unsupportedReason(attachment), "unsupported_type");
-					fragments.push(failureFragment(resource));
-					return resource;
-				}
-			}
-		} catch (err) {
-			const { code, message } = errorDetails(err);
+			if (declaredKind === "image") return await this.prepareImage(attachment, filename, downloader, images, fragments, acceptsImages);
+			if (declaredKind === "voice") return await this.prepareVoice(attachment, filename, downloader, signal, fragments);
+			return await this.prepareFile(attachment, filename, downloader, fragments, textBudget);
+		} catch (error) {
+			const details = errorDetails(error);
 			const resource: PreparedAttachment = {
-				kind: kind === "document" ? "document" : kind === "voice" ? "voice" : kind === "image" ? "image" : "unsupported",
+				kind: declaredKind === "voice" ? "voice" : declaredKind === "image" ? "image" : "file",
 				filename,
-				status: kind === "unsupported" ? "rejected" : "failed",
-				...(kind === "unsupported" ? { reason: message } : { note: message }),
-				errorCode: code,
-			} as PreparedAttachment;
+				status: "failed",
+				note: details.message,
+				errorCode: details.code,
+			};
 			fragments.push(failureFragment(resource));
 			return resource;
 		}
@@ -145,125 +118,94 @@ export class AttachmentPipeline {
 		attachment: QQAttachment,
 		filename: string,
 		downloader: AttachmentDownloader,
-		remainingBytes: number,
 		images: QQImageContent[],
 		fragments: string[],
+		acceptsImages: boolean,
 	): Promise<PreparedAttachment> {
-		if (!this.config.media.image.enabled) throw rejected("image_disabled", "图片处理已关闭");
-		if (attachment.size !== undefined && attachment.size > this.config.media.image.maxBytes) {
-			throw rejected("size_limit", "图片超过大小限制");
-		}
 		if (!attachment.url) throw rejected("missing_url", "图片附件缺少下载 URL");
-		const downloaded = await downloader.download(attachment.url, this.config.media.image.maxBytes, remainingBytes);
-		if (downloaded.media.kind !== "image") throw rejected("mime_mismatch", "附件内容不是受支持的 JPEG/PNG/GIF 图片");
-		const bytes = await readFile(downloaded.path);
-		const resized = await resizeImage(bytes, downloaded.media.mimeType);
-		if (!resized) throw rejected("image_conversion_failed", "图片转换失败或无法压缩到模型限制内");
+		const downloaded = await downloader.download(attachment.url);
+		if (downloaded.media.kind !== "image") return this.genericDownloaded(filename, downloaded, fragments);
+		if (this.config.inboundMedia.deniedKinds.includes("image")) {
+			return rejectedResource(filename, "image", "kind_denied", "已禁止接收 image 类型附件", fragments);
+		}
+		if (!acceptsImages) return readyLocalFile("image", filename, downloaded, "当前模型不支持内联图片，已保留本地文件供 Pi 工具读取", fragments);
+		const resized = await resizeImage(await readFile(downloaded.path), downloaded.media.mimeType);
+		if (!resized) return readyLocalFile("image", filename, downloaded, "图片无法转换为模型输入，已保留本地文件供 Pi 工具读取", fragments);
 		images.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
 		fragments.push(`<image index="${images.length}" name="${escapeXml(filename)}" mime="${escapeXml(resized.mimeType)}" />`);
-		return { kind: "image", filename, status: "ready", mimeType: resized.mimeType };
+		return { kind: "image", filename, status: "ready", mimeType: resized.mimeType, localPath: downloaded.path };
 	}
 
 	private async prepareVoice(
 		attachment: QQAttachment,
 		filename: string,
 		downloader: AttachmentDownloader,
-		remainingBytes: number,
 		signal: AbortSignal,
 		fragments: string[],
 	): Promise<PreparedAttachment> {
-		const voice = this.config.media.voice;
-		if (!voice.enabled) throw rejected("voice_disabled", "语音处理已关闭");
 		const qqText = attachment.asrReferText?.trim();
-		if (voice.preferQQAsr && qqText) return readyVoice(filename, qqText, "qq-asr", fragments);
-
-		if (!voice.stt) {
-			if (qqText) return readyVoice(filename, qqText, "qq-asr", fragments);
-			throw rejected("stt_not_configured", "QQ 未提供语音 ASR 文本，且未配置 STT 服务");
-		}
-		if (attachment.size !== undefined && attachment.size > voice.maxBytes) throw rejected("size_limit", "语音超过大小限制");
+		if (qqText) return readyVoice(filename, qqText, "qq-asr", fragments);
 		const urls = uniqueStrings([attachment.voiceWavUrl, attachment.url]);
-		if (!urls.length) {
-			if (qqText) return readyVoice(filename, qqText, "qq-asr", fragments);
-			throw rejected("missing_url", "语音附件缺少下载 URL");
-		}
-
-		let downloaded: DownloadedAttachment;
+		if (!urls.length) throw rejected("missing_url", "语音附件缺少下载 URL");
+		const downloaded = await downloader.downloadFirst(urls);
+		if (downloaded.media.kind !== "audio") return this.genericDownloaded(filename, downloaded, fragments);
+		const stt = this.config.inboundMedia.stt;
+		if (!stt) return readyLocalFile("voice", filename, downloaded, "QQ 未提供 ASR，已保留音频文件供 Pi 工具读取", fragments);
 		try {
-			downloaded = await downloader.downloadFirst(urls, voice.maxBytes, remainingBytes);
-		} catch (err) {
-			if (qqText) return readyVoice(filename, qqText, "qq-asr", fragments);
-			throw err;
-		}
-		if (downloaded.media.kind !== "audio") {
-			if (qqText) return readyVoice(filename, qqText, "qq-asr", fragments);
-			throw rejected("mime_mismatch", "下载内容不是支持的 WAV/MP3/OGG/FLAC 音频");
-		}
-		try {
-			const transcript = await transcribeOpenAI(
-				{
-					path: downloaded.path,
-					filename: replaceExtension(filename, downloaded.media.extension),
-					mimeType: downloaded.media.mimeType,
-				},
-				voice.stt,
-				signal,
-			);
-			return readyVoice(filename, transcript, "stt", fragments);
-		} catch (err) {
-			if (qqText) return readyVoice(filename, qqText, "qq-asr", fragments);
-			throw err;
+			const transcript = await transcribeOpenAI({
+				path: downloaded.path,
+				filename: replaceExtension(filename, downloaded.media.extension),
+				mimeType: downloaded.media.mimeType,
+			}, stt, signal);
+			return { ...readyVoice(filename, transcript, "stt", fragments), localPath: downloaded.path };
+		} catch (error) {
+			const details = errorDetails(error);
+			return readyLocalFile("voice", filename, downloaded, `语音转写失败（${details.message}），已保留音频文件供 Pi 工具读取`, fragments);
 		}
 	}
 
-	private async prepareDocument(
+	private async prepareFile(
 		attachment: QQAttachment,
 		filename: string,
 		downloader: AttachmentDownloader,
-		remainingBytes: number,
 		fragments: string[],
+		textBudget: { remaining: number },
 	): Promise<PreparedAttachment> {
-		const documents = this.config.media.documents;
-		if (!documents.enabled) throw rejected("documents_disabled", "文件处理已关闭");
-		const extension = declaredExtension(attachment);
-		if (![".txt", ".pdf", ".doc"].includes(extension) || !documents.allowExtensions.includes(extension)) {
-			throw rejected("unsupported_type", unsupportedReason(attachment));
-		}
-		if (extension === ".doc") {
-			if (attachment.size !== undefined && attachment.size > documents.maxDocBytes) throw rejected("size_limit", "DOC 文件超过大小限制");
-			if (!attachment.url) throw rejected("missing_url", "DOC 附件缺少下载 URL");
-			const downloaded = await downloader.download(attachment.url, documents.maxDocBytes, remainingBytes);
-			if (downloaded.media.kind !== "doc") throw rejected("mime_mismatch", "文件内容不是旧版二进制 DOC");
-			const resource: PreparedAttachment = {
-				kind: "document",
-				filename,
-				status: "rejected",
-				note: "已收到并验证 DOC 文件，但当前版本暂不安全提取旧版二进制 DOC 正文",
-				errorCode: "doc_extraction_unsupported",
-			};
-			fragments.push(failureFragment(resource));
-			return resource;
-		}
-		const maxBytes = extension === ".txt" ? documents.maxTxtBytes : documents.maxPdfBytes;
-		if (attachment.size !== undefined && attachment.size > maxBytes) throw rejected("size_limit", "文件超过大小限制");
 		if (!attachment.url) throw rejected("missing_url", "文件附件缺少下载 URL");
-		const downloaded = await downloader.download(attachment.url, maxBytes, remainingBytes);
-		if (extension === ".txt" && downloaded.media.kind !== "text") throw rejected("mime_mismatch", "文件内容不是纯文本 TXT");
-		if (extension === ".pdf" && downloaded.media.kind !== "pdf") throw rejected("mime_mismatch", "文件内容不是 PDF");
-		const extracted = extension === ".txt"
-			? await extractTxt(downloaded.path, documents.maxExtractedChars)
-			: await extractPdf(downloaded.path, documents.maxPdfPages, documents.maxExtractedChars);
-		fragments.push(
-			`<document name="${escapeXml(filename)}" type="${extension.slice(1)}" truncated="${extracted.truncated}">\n${escapeXml(extracted.text)}\n</document>`,
-		);
-		return {
-			kind: "document",
-			filename,
-			status: "ready",
-			extractedText: extracted.text,
-			truncated: extracted.truncated,
-			note: extracted.pages ? `${extracted.pages} 页` : undefined,
-		};
+		const downloaded = await downloader.download(attachment.url);
+		if (this.config.inboundMedia.deniedKinds.includes(sniffedKind(downloaded))) {
+			return rejectedResource(filename, sniffedKind(downloaded), "kind_denied", `已禁止接收 ${sniffedKind(downloaded)} 类型附件`, fragments);
+		}
+		const detectedExtension = downloaded.media.extension.toLowerCase();
+		if (detectedExtension && this.config.inboundMedia.deniedExtensions.includes(detectedExtension)) {
+			return rejectedResource(filename, "file", "extension_denied", `已禁止接收 ${detectedExtension} 文件`, fragments);
+		}
+		if ((downloaded.media.kind === "text" || downloaded.media.kind === "pdf") && textBudget.remaining > 0) {
+			try {
+				const extracted = downloaded.media.kind === "text"
+					? await extractTxt(downloaded.path, textBudget.remaining)
+					: await extractPdf(downloaded.path, textBudget.remaining);
+				textBudget.remaining = Math.max(0, textBudget.remaining - extracted.text.length);
+				fragments.push(`<document name="${escapeXml(filename)}" type="${downloaded.media.extension.slice(1)}" path="${escapeXml(downloaded.path)}" truncated="${extracted.truncated}">\n${escapeXml(extracted.text)}\n</document>`);
+				return {
+					kind: "document",
+					filename,
+					status: "ready",
+					extractedText: extracted.text,
+					localPath: downloaded.path,
+					truncated: extracted.truncated,
+					note: extracted.pages ? `${extracted.pages} 页` : undefined,
+				};
+			} catch (error) {
+				const details = errorDetails(error);
+				return readyLocalFile("file", filename, downloaded, `正文提取失败（${details.message}），已保留原文件供 Pi 工具读取`, fragments);
+			}
+		}
+		return this.genericDownloaded(filename, downloaded, fragments);
+	}
+
+	private genericDownloaded(filename: string, downloaded: DownloadedAttachment, fragments: string[]): PreparedAttachment {
+		return readyLocalFile("file", filename, downloaded, "已保留附件供 Pi 工具按需读取", fragments);
 	}
 }
 
@@ -274,10 +216,7 @@ function makePrepared(
 	fragments: string[],
 	cleanup: () => Promise<void>,
 ): PreparedQQMessage {
-	const header = msg.type === "private"
-		? `[QQ private user=${msg.userOpenId} message=${msg.id}]`
-		: `[QQ group=${msg.groupOpenId} user=${msg.userOpenId} message=${msg.id}]`;
-	const parts = [header];
+	const parts = [`[QQ private user=${msg.userOpenId} message=${msg.id}]`];
 	if (msg.text.trim()) parts.push(msg.text.trim());
 	if (fragments.length) {
 		parts.push(
@@ -288,58 +227,65 @@ function makePrepared(
 	return { prompt: parts.join("\n\n"), images, resources, cleanup };
 }
 
-function readyVoice(
-	filename: string,
-	transcript: string,
-	source: "qq-asr" | "stt",
-	fragments: string[],
-): PreparedAttachment {
-	fragments.push(
-		`<qq-voice name="${escapeXml(filename)}" source="${source}" confidence="reference-only">\n${escapeXml(transcript)}\n</qq-voice>`,
-	);
+function readyVoice(filename: string, transcript: string, source: "qq-asr" | "stt", fragments: string[]): PreparedAttachment {
+	fragments.push(`<qq-voice name="${escapeXml(filename)}" source="${source}" confidence="reference-only">\n${escapeXml(transcript)}\n</qq-voice>`);
 	return { kind: "voice", filename, status: "ready", transcript, source };
 }
 
+function readyLocalFile(
+	kind: "image" | "voice" | "file",
+	filename: string,
+	downloaded: DownloadedAttachment,
+	note: string,
+	fragments: string[],
+): PreparedAttachment {
+	fragments.push(`<attachment name="${escapeXml(filename)}" kind="${kind}" status="ready" mime="${escapeXml(downloaded.media.mimeType)}" path="${escapeXml(downloaded.path)}">${escapeXml(note)}</attachment>`);
+	return { kind, filename, status: "ready", mimeType: downloaded.media.mimeType, localPath: downloaded.path, note };
+}
+
+function rejectedResource(
+	filename: string,
+	kind: QQMediaKind,
+	code: string,
+	note: string,
+	fragments: string[],
+): PreparedAttachment {
+	const resource: PreparedAttachment = { kind: kind === "voice" ? "voice" : kind === "image" ? "image" : "file", filename, status: "rejected", note, errorCode: code };
+	fragments.push(failureFragment(resource));
+	return resource;
+}
+
 function failureFragment(resource: PreparedAttachment): string {
-	const note = resource.kind === "unsupported" ? resource.reason : resource.note ?? "处理失败";
-	return `<attachment name="${escapeXml(resource.filename)}" kind="${resource.kind}" status="${resource.status}" error="${escapeXml(resource.errorCode ?? "unknown")}">${escapeXml(note)}</attachment>`;
+	return `<attachment name="${escapeXml(resource.filename)}" kind="${resource.kind}" status="${resource.status}" error="${escapeXml(resource.errorCode ?? "unknown")}">${escapeXml(resource.note ?? "处理失败")}</attachment>`;
 }
 
-function unsupported(attachment: QQAttachment, reason: string, errorCode: string): PreparedAttachment {
-	return { kind: "unsupported", filename: safeOriginalFilename(attachment.filename), status: "rejected", reason, errorCode };
+function classifyAttachment(attachment: QQAttachment): "image" | "voice" | "file" {
+	return mediaKind(attachment) === "image" ? "image" : mediaKind(attachment) === "voice" ? "voice" : "file";
 }
 
-export function classifyAttachment(attachment: QQAttachment): "image" | "voice" | "document" | "unsupported" {
+function mediaKind(attachment: QQAttachment): QQMediaKind {
 	const type = attachment.contentType.toLowerCase();
-	const extension = declaredExtension(attachment);
-	if (type.startsWith("image/") || [".jpg", ".jpeg", ".png", ".gif"].includes(extension)) return "image";
+	const extension = extname(attachment.filename).toLowerCase();
+	if (type.startsWith("image/") || [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"].includes(extension)) return "image";
 	if (type === "voice" || type.startsWith("audio/") || attachment.voiceWavUrl || attachment.asrReferText) return "voice";
-	if (type === "file" || [".txt", ".pdf", ".doc", ".docx", ".zip", ".rar", ".7z"].includes(extension)) return "document";
-	return "unsupported";
+	if (type.startsWith("video/") || [".mp4", ".mov", ".avi"].includes(extension)) return "video";
+	return "file";
 }
 
-function declaredExtension(attachment: QQAttachment): string {
-	return extname(attachment.filename).toLowerCase();
-}
-
-function unsupportedReason(attachment: QQAttachment): string {
-	const extension = declaredExtension(attachment);
-	if ([".zip", ".rar", ".7z"].includes(extension)) return "压缩包不受支持，且不会自动解压";
-	if (extension === ".docx") return "QQ 官方当前文件接收范围不包含 DOCX；本版本不解析该格式";
-	if (attachment.contentType.startsWith("video/") || [".mp4", ".mov", ".avi"].includes(extension)) return "当前版本不支持视频理解";
-	return `不支持的附件类型${extension ? `（${extension}）` : ""}`;
+function sniffedKind(downloaded: DownloadedAttachment): QQMediaKind {
+	return downloaded.media.kind === "image" ? "image" : downloaded.media.kind === "audio" ? "voice" : "file";
 }
 
 function rejected(code: string, message: string): AttachmentDownloadError {
 	return new AttachmentDownloadError(code, message);
 }
 
-function errorDetails(err: unknown): { code: string; message: string } {
-	if (err instanceof AttachmentDownloadError || err instanceof AttachmentExtractError || err instanceof SttError) {
-		return { code: err.code, message: err.message };
+function errorDetails(error: unknown): { code: string; message: string } {
+	if (error instanceof AttachmentDownloadError || error instanceof AttachmentExtractError || error instanceof SttError) {
+		return { code: error.code, message: error.message };
 	}
-	if (err instanceof Error) return { code: "processing_failed", message: err.message.slice(0, 300) };
-	return { code: "processing_failed", message: String(err).slice(0, 300) };
+	if (error instanceof Error) return { code: "processing_failed", message: error.message.slice(0, 300) };
+	return { code: "processing_failed", message: String(error).slice(0, 300) };
 }
 
 function escapeXml(value: string): string {
@@ -347,7 +293,7 @@ function escapeXml(value: string): string {
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {
-	return [...new Set(values.filter((v): v is string => typeof v === "string" && v.length > 0))];
+	return [...new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0))];
 }
 
 function replaceExtension(filename: string, extension: string): string {

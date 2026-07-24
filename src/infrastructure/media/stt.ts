@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 
 import type { QQMediaSttConfig } from "../../application/ports";
 
+const STT_REQUEST_TIMEOUT_MS = 5 * 60_000;
+
 export class SttError extends Error {
 	constructor(
 		readonly code: string,
@@ -30,7 +32,7 @@ export async function transcribeOpenAI(
 	const controller = new AbortController();
 	const onAbort = () => controller.abort(outerSignal.reason);
 	outerSignal.addEventListener("abort", onAbort, { once: true });
-	const timer = setTimeout(() => controller.abort(new Error("stt timeout")), config.timeoutMs);
+	const timer = setTimeout(() => controller.abort(new Error("stt timeout")), STT_REQUEST_TIMEOUT_MS);
 	try {
 		const bytes = await readFile(input.path);
 		const form = new FormData();

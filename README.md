@@ -29,14 +29,14 @@ pi install C:\absolute\path\to\pi-agent-qqbot
 扩展只读取 `~/.pi/agent/pi-agent-qqbot.json`；Windows 对应 `%USERPROFILE%\.pi\agent\pi-agent-qqbot.json`。复制 `pi-agent-qqbot.json.example` 后填写：
 
 - 一个 QQ Bot `appId` 和 `clientSecret`
-- `enabled: true`
-- `allowUsers` 中恰好一个非空 QQ user OpenID
-- 空的 `allowGroups`
-- `commands.allowInGroups: false`
+- 唯一的 QQ user `ownerOpenId`
+- `sandbox` 是否使用 QQ 沙箱环境
 
-真实配置和密钥不能提交到 Git。旧 `startup`、`sessions`、访问审批和管理员字段会被忽略，不能触发自动启动或创建独立 QQ session。
+真实配置和密钥不能提交到 Git。扩展只支持该用户的 C2C 私聊，群消息在附件下载和 Agent 工作前直接忽略。
 
-`0.6.0` 将配置升级到 `schemaVersion: 4`。旧 `outboundMedia.allowedRoots` 不再生效；请改用 `outboundMedia.deniedRoots`。空数组表示不禁用任何目录，因此启用本地文件出站后，Pi 进程当前账户可读取的文件默认都可发送。
+`0.7.0` 将配置升级到 `schemaVersion: 5`。schema 4 会在内存中兼容读取，但数量、大小、总量、超时、格式白名单、队列长度和展示开关不再生效。`deniedKinds`、`deniedExtensions` 和 `deniedRoots` 都是黑名单；空数组或省略字段表示不增加对应限制。
+
+`outboundMedia.enabled` 仍是本地文件出站总开关。启用后，空的 `deniedRoots` 允许发送 Pi 进程当前账户可读取的所有普通文件。可选外部语音转写配置放在 `inboundMedia.stt`，包含 `baseUrl`、`apiKeyEnv` 和 `model`；QQ 已提供 ASR 文本时总是优先使用 QQ 文本。
 
 ### 使用
 
@@ -65,14 +65,16 @@ QQ 不能执行任何 `/qqbot-*` 本地控制命令。Pi 原生 `/new`、`/resum
 - 仅接受配置中的唯一 C2C 用户；其他用户和群消息在附件处理或 Agent 工作前被忽略。
 - `link.conflictPolicy: "ask"` 会在新 Pi 本地确认；`"takeover"` 会直接请求旧 owner 交接。
 - 接管使用 appId 范围的 owner record、PID、随机 nonce 和 loopback endpoint；不会终止旧 Pi 进程。
-- 入站媒体受 HTTPS、SSRF、重定向、大小和超时限制。
+- 入站媒体不设置扩展层数量、格式、单文件或总量上限；未知格式作为临时文件交给 Pi 工具按需读取。
+- 入站下载仍强制 HTTPS、SSRF 防护、有限重定向、取消处理和网络停滞检测；这些是安全不变量，不是产品配额。
 - 本地文件出站总开关默认关闭；启用后路径采用黑名单策略，默认允许当前 Pi 账户可读取的目录，`outboundMedia.deniedRoots` 中的 root 及其子目录禁止发送。
-- 所有候选文件仍经过 realpath、symlink/junction、hard-link、rename-race、普通文件和大小校验，禁用目录按规范化后的真实路径判定。
+- 所有候选文件仍经过 realpath、symlink/junction、hard-link、rename-race 和普通文件校验，禁用目录按规范化后的真实路径判定。
+- 出站使用 QQ 官方分片上传协议。图片、视频和语音超过软限制时自动降级为普通文件；200 MB 硬限制和每条消息 4 次被动回复来自 QQ 平台，不是用户配置。
 - 模型不能指定 QQ target、`msg_id` 或回复序号。
 
 ## English
 
-Copy `pi-agent-qqbot.json.example` to `~/.pi/agent/pi-agent-qqbot.json` (or `%USERPROFILE%\.pi\agent\pi-agent-qqbot.json` on Windows). Configure exactly one `allowUsers` OpenID, no groups, enable the extension, then run `/qqbot-start` and `/qqbot-link` locally.
+Copy `pi-agent-qqbot.json.example` to `~/.pi/agent/pi-agent-qqbot.json` (or `%USERPROFILE%\.pi\agent\pi-agent-qqbot.json` on Windows). Configure one `ownerOpenId`, then run `/qqbot-start` and `/qqbot-link` locally.
 
 Loading Pi never starts the QQ Gateway. `/qqbot-stop` pauses transport without dropping the in-process link; `/qqbot-start` resumes it. Native Pi session changes retain the link. Only QQ-originated runs reply to QQ, while terminal-originated output remains local.
 

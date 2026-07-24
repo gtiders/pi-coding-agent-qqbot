@@ -1,5 +1,9 @@
 # pi-agent-qqbot 全面重构设计
 
+> 本文记录 2026-07-22 的架构重构。配置和媒体策略已由
+> [2026-07-23-qqbot-schema5-config-design.md](./2026-07-23-qqbot-schema5-config-design.md)
+> 取代；本文中的旧配置字段和媒体上限不再是当前要求。
+
 ## 1. 背景与目标
 
 当前项目是一个连接 QQ 官方机器人 API 与本地 Pi coding agent 的 TypeScript 扩展。项目功能已经覆盖 QQ WebSocket 接入、访问控制、隔离 Agent 会话、远程命令、入站附件、出站文件、终端视图和热重载，但源码仍为根目录平铺结构，核心运行时集中在大型类中，测试、类型检查和跨平台约束不足。

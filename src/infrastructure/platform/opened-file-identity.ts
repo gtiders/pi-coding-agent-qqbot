@@ -28,7 +28,8 @@ export class LocalFileError extends Error {
 export interface OpenedLocalFile {
 	readonly path: string;
 	readonly size: number;
-	read(): Promise<Buffer>;
+	readRange(offset: number, length: number): Promise<Buffer>;
+	verifyUnchanged(): Promise<void>;
 	close(): Promise<void>;
 }
 
@@ -77,26 +78,34 @@ function createOpenedFile(
 ): OpenedLocalFile {
 	let closed = false;
 	let beforeRead = options.beforeReadForTest;
+	const verify = async (): Promise<void> => {
+		if (closed) throw new LocalFileError("file_changed", "File handle is closed");
+		assertNotAborted(options.signal);
+		const currentPath = await realpath(path).catch(() => undefined);
+		const current = currentPath === undefined ? undefined : await stat(currentPath).catch(() => undefined);
+		const opened = await handle.stat();
+		if (currentPath !== path || current === undefined || !sameIdentity(initial, current) || !sameSnapshot(initial, opened)) {
+			throw new LocalFileError("file_changed", "File changed after opening");
+		}
+	};
 	return {
 		path,
 		size: initial.size,
-		async read(): Promise<Buffer> {
-			if (closed) throw new LocalFileError("file_changed", "File handle is closed");
-			assertNotAborted(options.signal);
+		async readRange(offset: number, length: number): Promise<Buffer> {
+			if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0) {
+				throw new LocalFileError("path_invalid", "Invalid file read range");
+			}
 			const hook = beforeRead;
 			beforeRead = undefined;
 			await hook?.();
-			assertNotAborted(options.signal);
-			const currentPath = await realpath(path).catch(() => undefined);
-			const current = currentPath === undefined ? undefined : await stat(currentPath).catch(() => undefined);
-			if (currentPath !== path || current === undefined || !sameIdentity(initial, current)) {
-				throw new LocalFileError("file_changed", "File path changed after opening");
-			}
-			const data = await handle.readFile();
-			const after = await handle.stat();
-			if (!sameSnapshot(initial, after)) throw new LocalFileError("file_changed", "File changed while reading");
-			return data;
+			await verify();
+			const wanted = Math.min(length, Math.max(0, initial.size - offset));
+			const buffer = Buffer.alloc(wanted);
+			const { bytesRead } = await handle.read(buffer, 0, wanted, offset);
+			await verify();
+			return bytesRead === wanted ? buffer : buffer.subarray(0, bytesRead);
 		},
+		verifyUnchanged: verify,
 		async close(): Promise<void> {
 			if (closed) return;
 			closed = true;

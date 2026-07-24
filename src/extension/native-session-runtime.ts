@@ -12,7 +12,7 @@ import { deliverFormattedReply } from "../application/deliver-reply.ts";
 import type { PiAgentQQBotConfig, QQInboundMessage, QQKeyboard, QQReplyTarget } from "../application/ports.ts";
 import { ReplyBudget } from "../domain/reply-budget.ts";
 import { NativeSessionLinkState, type TurnOrigin } from "../domain/native-session-link.ts";
-import { validateEnabled } from "../infrastructure/config/normalize-config.ts";
+import { validateConfig } from "../infrastructure/config/normalize-config.ts";
 import { AttachmentPipeline } from "../infrastructure/media/attachment-pipeline.ts";
 import { QQOutboundDeliveryContext, type QQOutboundKind } from "../infrastructure/media/outbound-media.ts";
 import { QQApi, QQApiError } from "../infrastructure/qq/api.ts";
@@ -28,8 +28,9 @@ import type { LogicalLink } from "../domain/native-session-link.ts";
 
 const UNLINKED_MESSAGE = "QQ 已连接，但尚未绑定到 Pi。请让本机操作员运行 /qqbot-link。";
 const LOCAL_ONLY_DENIAL = "该命令只能由本机 Pi 终端执行。";
-const BUSY_MESSAGE = "Pi 当前等待队列已满，请稍后重试。";
 const EMPTY_REPLY = "本次没有生成可发送的文本回复。";
+const MODEL_PAGE_SIZE = 6;
+const SESSION_LIST_SIZE = 5;
 const LOCAL_ONLY_COMMANDS = new Set([
 	"qqbot-start",
 	"qqbot-stop",
@@ -135,6 +136,7 @@ export class NativeSessionRuntime {
 	private readonly qqMessages = new Map<string, QQInboundMessage>();
 	private readonly replyBudgets = new Map<string, ReplyBudget>();
 	private readonly outboundDeliveries = new Map<string, QQOutboundDeliveryContext>();
+	private readonly attachmentCleanups = new Map<string, () => Promise<void>>();
 	private readonly agentOutputs: string[] = [];
 	private readonly createTransport: NonNullable<NativeSessionRuntimeOptions["createTransport"]>;
 	private readonly createAttachmentPipeline: NonNullable<NativeSessionRuntimeOptions["createAttachmentPipeline"]>;
@@ -173,9 +175,9 @@ export class NativeSessionRuntime {
 		if (this.state.gateway === "running") return;
 		if (this.startPromise) return this.startPromise;
 		const config = this.requireConfig();
-		const invalid = validateEnabled(config);
+		const invalid = validateConfig(config);
 		if (invalid) throw new Error(invalid);
-		const userOpenId = config.allowUsers?.[0]!;
+		const userOpenId = config.ownerOpenId;
 		const currentSession = sessionIdentity(ctx);
 		this.currentSession = currentSession;
 		this.state.setGateway("starting");
@@ -204,9 +206,9 @@ export class NativeSessionRuntime {
 					else if (connection === "connecting") this.state.setGateway("starting");
 					else if (connection === "error") this.state.setGateway("failed");
 					else if (this.state.gateway !== "stopping") this.state.setGateway("stopped");
-					if (detail && config.debug) console.error(`[pi-agent-qqbot] ${detail}`);
+					if (detail && config.logging.level === "debug") console.error(`[pi-agent-qqbot] ${detail}`);
 				},
-				log: (message) => { if (config.debug) console.error(`[pi-agent-qqbot] ${message}`); },
+				log: (message) => { if (config.logging.level === "debug") console.error(`[pi-agent-qqbot] ${message}`); },
 				});
 				this.transport = transport;
 				await transport.gateway.connect();
@@ -242,7 +244,7 @@ export class NativeSessionRuntime {
 		if (this.state.gateway !== "running") throw new Error("QQ Gateway must be running before /qqbot-link");
 		this.bridge.captureCommandContext(ctx);
 		const config = this.requireConfig();
-		const userOpenId = config.allowUsers?.[0];
+		const userOpenId = config.ownerOpenId;
 		if (!userOpenId) throw new Error("single QQ user is not configured");
 		this.currentSession = sessionIdentity(ctx);
 		return this.state.bind(config.appId, userOpenId, this.currentSession);
@@ -265,6 +267,8 @@ export class NativeSessionRuntime {
 		this.replyBudgets.clear();
 		for (const delivery of this.outboundDeliveries.values()) delivery.close();
 		this.outboundDeliveries.clear();
+		await Promise.allSettled([...this.attachmentCleanups.values()].map((cleanup) => cleanup()));
+		this.attachmentCleanups.clear();
 	}
 
 	onInput(event: InputEvent): void {
@@ -294,7 +298,7 @@ export class NativeSessionRuntime {
 			if (!target || this.state.gateway !== "running") return;
 			await this.sendReply(target, text.trim() || EMPTY_REPLY, budget);
 		} finally {
-			this.releaseQQMessage(origin.messageId);
+			await this.releaseQQMessage(origin.messageId);
 		}
 	}
 
@@ -328,7 +332,7 @@ export class NativeSessionRuntime {
 	async handleInbound(message: QQInboundMessage): Promise<void> {
 		if (this.state.gateway !== "running") return;
 		const config = this.requireConfig();
-		const allowedUser = config.allowUsers?.[0];
+		const allowedUser = config.ownerOpenId;
 		if (message.type !== "private" || !allowedUser || message.userOpenId !== allowedUser) return;
 		if (!this.state.link) {
 			await this.sendReply(targetFor(message), UNLINKED_MESSAGE);
@@ -340,25 +344,27 @@ export class NativeSessionRuntime {
 			return;
 		}
 		if (!normalized && message.attachments.length === 0) return;
-		const queuedQQ = this.pendingQQ.length + this.acceptedOrigins.filter((origin) => origin.source === "qq").length;
-		if (queuedQQ >= (config.maxQueueSize ?? 20)) {
-			await this.sendReply(targetFor(message), BUSY_MESSAGE);
-			return;
-		}
-		const prepared = await this.createAttachmentPipeline(config).prepare(message, new AbortController().signal);
+		const prepared = await this.createAttachmentPipeline(config).prepare(
+			message,
+			new AbortController().signal,
+			{},
+			this.attachmentPreparationOptions(),
+		);
+		let cleanupOwnedByRuntime = false;
 		try {
-			if (prepared.images.length > 0 && this.currentContext?.model?.input.includes("image") !== true) {
-				await this.sendReply(targetFor(message), "当前 Pi 模型不支持图片输入；本条消息未提交，请切换到支持视觉的模型后重试。");
+			const link = this.state.link;
+			if (!link) {
+				await prepared.cleanup();
 				return;
 			}
-			const link = this.state.link;
-			if (!link) return;
 			const origin = { source: "qq" as const, generation: link.generation, messageId: message.id };
 			const target = targetFor(message);
 			this.pendingQQ.push({ prompt: prepared.prompt, origin, target });
 			this.qqTargets.set(message.id, target);
 			this.qqMessages.set(message.id, message);
 			this.replyBudgets.set(message.id, new ReplyBudget(4));
+			this.attachmentCleanups.set(message.id, prepared.cleanup);
+			cleanupOwnedByRuntime = true;
 			const content: Parameters<ExtensionAPI["sendUserMessage"]>[0] = [
 				{ type: "text", text: prepared.prompt },
 				...prepared.images,
@@ -370,11 +376,12 @@ export class NativeSessionRuntime {
 			} catch (error) {
 				const index = this.pendingQQ.findIndex((entry) => entry.origin.messageId === message.id);
 				if (index >= 0) this.pendingQQ.splice(index, 1);
-				this.releaseQQMessage(message.id);
+				await this.releaseQQMessage(message.id);
 				throw error;
 			}
-		} finally {
-			await prepared.cleanup();
+		} catch (error) {
+			if (!cleanupOwnedByRuntime) await prepared.cleanup();
+			throw error;
 		}
 	}
 
@@ -409,9 +416,7 @@ export class NativeSessionRuntime {
 		try {
 			const reply = await this.executeRemoteCommand(command.name, command.rawArgs);
 			const rows = reply.keyboardRows ?? BACK_TO_HELP_ROWS;
-			const keyboard = this.requireConfig().commands.buttons
-				? buildCommandKeyboard(message, rows)
-				: undefined;
+			const keyboard = buildCommandKeyboard(message, rows);
 			await this.sendReply(targetFor(message), reply.text, new ReplyBudget(4), keyboard);
 		} catch (error) {
 			await this.sendReply(targetFor(message), `命令未执行：${safeError(error)}`);
@@ -489,7 +494,7 @@ export class NativeSessionRuntime {
 			}
 		}
 		if (!models.length) throw new Error(query || normalized ? "没有匹配的已配置模型" : "当前没有可用模型");
-		const page = buildModelPage(models, requestedPage, this.requireConfig().commands.modelPageSize, query);
+		const page = buildModelPage(models, requestedPage, MODEL_PAGE_SIZE, query);
 		return {
 			text: formatModelSelection(page, this.bridge.status().model ?? "unknown", query),
 			keyboardRows: page.keyboardRows,
@@ -511,7 +516,7 @@ export class NativeSessionRuntime {
 	private async sessionListReply(query = ""): Promise<RemoteCommandReply> {
 		const sessions = await this.bridge.listSessions(query);
 		if (!sessions.length) return { text: query ? "没有找到匹配的 Pi 会话。" : "没有找到可恢复的 Pi 会话。" };
-		const visible = sessions.slice(0, this.requireConfig().commands.maxListItems);
+		const visible = sessions.slice(0, SESSION_LIST_SIZE);
 		const keyboardRows = chunkButtons(visible.slice(0, 8).map((entry, index) => ({
 			label: (entry.name?.trim() || `会话 ${index + 1}`).slice(0, 20),
 			command: `/resume ${shortId(entry.id)}`,
@@ -530,12 +535,11 @@ export class NativeSessionRuntime {
 	private async sendReply(target: QQReplyTarget, text: string, budget = new ReplyBudget(4), keyboard?: QQKeyboard): Promise<void> {
 		const transport = this.transport;
 		if (!transport) return;
-		const config = this.requireConfig();
-		const formatted = formatQQReply(`${config.replyPrefix ?? ""}${text}`, config.replyFormat);
+		const formatted = formatQQReply(text);
 		await deliverFormattedReply(transport.api, budget, {
 			target,
 			formatted,
-			useMarkdown: config.replyFormat !== "plain",
+			useMarkdown: true,
 			...(keyboard ? { keyboard } : {}),
 			canFallback: (error) => error instanceof QQApiError && error.status >= 400 && error.status < 500,
 		});
@@ -546,12 +550,27 @@ export class NativeSessionRuntime {
 		return this.config;
 	}
 
-	private releaseQQMessage(messageId: string): void {
+	private attachmentPreparationOptions(): { acceptsImages: boolean; textBudgetChars: number } {
+		const context = this.currentContext;
+		const usage = context?.getContextUsage();
+		const contextWindow = usage?.contextWindow ?? context?.model?.contextWindow ?? 32_000;
+		const usedTokens = usage?.tokens ?? 0;
+		const availableTokens = Math.max(0, contextWindow - usedTokens);
+		return {
+			acceptsImages: context?.model?.input?.includes("image") === true,
+			textBudgetChars: Math.floor(availableTokens * 1.5),
+		};
+	}
+
+	private async releaseQQMessage(messageId: string): Promise<void> {
 		this.qqTargets.delete(messageId);
 		this.qqMessages.delete(messageId);
 		this.replyBudgets.delete(messageId);
 		this.outboundDeliveries.get(messageId)?.close();
 		this.outboundDeliveries.delete(messageId);
+		const cleanup = this.attachmentCleanups.get(messageId);
+		this.attachmentCleanups.delete(messageId);
+		await cleanup?.().catch(() => undefined);
 	}
 
 	private requirePi(): ExtensionAPI {
@@ -563,8 +582,8 @@ export class NativeSessionRuntime {
 function defaultTransport(config: PiAgentQQBotConfig, callbacks: QQGatewayCallbacks): NativeTransport {
 	const auth = new QQAuth(config.appId, config.clientSecret);
 	return {
-		api: new QQApi(auth, { sandbox: config.sandbox ?? true }),
-		gateway: new QQGateway(auth, { sandbox: config.sandbox ?? true }, callbacks),
+		api: new QQApi(auth, { sandbox: config.sandbox }),
+		gateway: new QQGateway(auth, { sandbox: config.sandbox }, callbacks),
 	};
 }
 

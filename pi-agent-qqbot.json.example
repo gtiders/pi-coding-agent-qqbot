@@ -1,66 +1,23 @@
 {
-  "schemaVersion": 4,
-  "enabled": false,
+  "schemaVersion": 5,
   "appId": "YOUR_QQBOT_APP_ID",
   "clientSecret": "YOUR_QQBOT_APP_SECRET",
   "sandbox": true,
-  "allowUsers": ["YOUR_SINGLE_QQ_USER_OPENID"],
-  "allowGroups": [],
-  "replyPrefix": "",
-  "maxQueueSize": 20,
-  "sendBusyNotice": false,
-  "commands": {
-    "allowInGroups": false,
-    "buttons": true,
-    "maxListItems": 5,
-    "modelPageSize": 6
-  },
+  "ownerOpenId": "YOUR_QQ_USER_OPENID",
   "link": {
     "conflictPolicy": "ask"
   },
-  "showProcess": false,
-  "replyFormat": "auto",
-  "progress": {
-    "enabled": true,
-    "ackAfterMs": 3000
+  "inboundMedia": {
+    "deniedKinds": [],
+    "deniedExtensions": []
   },
   "outboundMedia": {
     "enabled": false,
-    "adminsOnly": true,
-    "allowPrivate": true,
-    "allowGroups": false,
     "deniedRoots": [],
-    "images": true,
-    "files": true,
-    "maxFilesPerTurn": 2,
-    "maxImageBytes": 10485760,
-    "maxFileBytes": 20971520,
-    "maxTotalBytes": 31457280,
-    "uploadTimeoutMs": 30000
+    "deniedKinds": [],
+    "deniedExtensions": []
   },
-  "media": {
-    "enabled": true,
-    "maxAttachments": 4,
-    "maxTotalBytes": 31457280,
-    "downloadTimeoutMs": 120000,
-    "image": {
-      "enabled": true,
-      "maxBytes": 10485760
-    },
-    "voice": {
-      "enabled": true,
-      "preferQQAsr": true,
-      "maxBytes": 26214400
-    },
-    "documents": {
-      "enabled": true,
-      "allowExtensions": [".txt", ".pdf", ".doc"],
-      "maxTxtBytes": 2097152,
-      "maxPdfBytes": 20971520,
-      "maxDocBytes": 10485760,
-      "maxPdfPages": 100,
-      "maxExtractedChars": 150000
-    }
-  },
-  "debug": false
+  "logging": {
+    "level": "info"
+  }
 }

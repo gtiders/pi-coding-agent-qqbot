@@ -10,12 +10,11 @@ import {
 
 function downloader(
 	messageId: string,
-	request?: (sourceUrl: string, signal: AbortSignal, maxBytes: number) => Promise<{ response: IncomingMessage; url: URL }>,
+	request?: (sourceUrl: string, signal: AbortSignal) => Promise<{ response: IncomingMessage; url: URL }>,
 ): AttachmentDownloader {
 	return new AttachmentDownloader({
 		runtimeId: "media-test",
 		messageId,
-		timeoutMs: 2_000,
 		signal: new AbortController().signal,
 		...(request ? { request } : {}),
 	});
@@ -25,7 +24,7 @@ test("preserves private-address errors instead of retrying them as network failu
 	const subject = downloader("private-address");
 	try {
 		await assert.rejects(
-			() => subject.download("https://127.0.0.1/secret", 1024, 1024),
+			() => subject.download("https://127.0.0.1/secret"),
 			(error: unknown) => error instanceof AttachmentDownloadError && error.code === "ssrf_blocked",
 		);
 	} finally {
@@ -33,7 +32,7 @@ test("preserves private-address errors instead of retrying them as network failu
 	}
 });
 
-test("normalizes streamed size overflow to the stable size_limit error", async () => {
+test("streams attachments without an extension-level byte limit", async () => {
 	const request = async (): Promise<{ response: IncomingMessage; url: URL }> => {
 		const response = Object.assign(Readable.from([Buffer.alloc(16)]), {
 			headers: {},
@@ -43,10 +42,8 @@ test("normalizes streamed size overflow to the stable size_limit error", async (
 	};
 	const subject = downloader("stream-overflow", request);
 	try {
-		await assert.rejects(
-			() => subject.download("https://example.com/file", 8, 8),
-			(error: unknown) => error instanceof AttachmentDownloadError && error.code === "size_limit",
-		);
+		const result = await subject.download("https://example.com/file");
+		assert.equal(result.bytes, 16);
 	} finally {
 		await subject.cleanup();
 	}

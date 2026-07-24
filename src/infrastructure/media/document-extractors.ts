@@ -37,14 +37,11 @@ export async function extractTxt(path: string, maxChars: number): Promise<Extrac
 	return truncateText(text, maxChars);
 }
 
-export async function extractPdf(path: string, maxPages: number, maxChars: number): Promise<ExtractedText> {
+export async function extractPdf(path: string, maxChars: number): Promise<ExtractedText> {
 	const bytes = await readFile(path);
 	let pdf: Awaited<ReturnType<typeof getDocumentProxy>> | undefined;
 	try {
 		pdf = await getDocumentProxy(new Uint8Array(bytes));
-		if (pdf.numPages > maxPages) {
-			throw new AttachmentExtractError("page_limit", `PDF 页数超过限制（最多 ${maxPages} 页）`);
-		}
 		const result = await extractText(pdf, { mergePages: true });
 		const text = sanitizeExtractedText(result.text);
 		if (!text.trim()) throw new AttachmentExtractError("pdf_no_text", "PDF 没有可提取的文本层；当前版本不支持 OCR");

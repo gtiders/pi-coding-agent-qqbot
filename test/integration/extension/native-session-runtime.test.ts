@@ -9,12 +9,9 @@ import { PiCommandBridge } from "../../../src/extension/pi-command-bridge.ts";
 import type { QQInboundMessage, QQKeyboard, QQReplyTarget } from "../../../src/application/ports.ts";
 
 const config = normalizeConfig({
-	enabled: true,
 	appId: "app",
 	clientSecret: "secret",
-	allowUsers: ["USER-1"],
-	allowGroups: [],
-	commands: { allowInGroups: false },
+	ownerOpenId: "USER-1",
 });
 
 test("start link stop start retains the logical link and current native session", async () => {
@@ -95,6 +92,28 @@ test("QQ input received while Pi is busy is delivered as a native follow-up", as
 	assert.deepEqual(harness.injected[0]?.options, { deliverAs: "followUp" });
 });
 
+test("does not impose an extension-level queue length", async () => {
+	const harness = createHarness(false);
+	await harness.runtime.start(harness.context);
+	harness.runtime.link(harness.context);
+	for (let index = 0; index < 25; index++) {
+		await harness.runtime.handleInbound(message(`qq-queued-${index}`, `queued ${index}`));
+	}
+	assert.equal(harness.injected.length, 25);
+	assert.ok(harness.injected.every((entry) => (entry.options as { deliverAs?: string }).deliverAs === "followUp"));
+});
+
+test("keeps inbound temporary resources until the owning agent turn settles", async () => {
+	const harness = createHarness();
+	await harness.runtime.start(harness.context);
+	harness.runtime.link(harness.context);
+	await harness.runtime.handleInbound(message("qq-cleanup", "inspect attachment"));
+	assert.equal(harness.cleanupCount(), 0);
+	harness.runtime.onAgentEnd(agentEnd("done"));
+	await harness.runtime.onAgentSettled();
+	assert.equal(harness.cleanupCount(), 1);
+});
+
 test("QQ command whitelist renders help and model selection keyboards", async () => {
 	const models = Array.from({ length: 8 }, (_, index) => ({
 		provider: index < 4 ? "deepseek" : "custom",
@@ -165,6 +184,7 @@ function createHarness(
 	const setThinkingLevels: string[] = [];
 	let thinkingLevel = "medium";
 	let transports = 0;
+	let cleanups = 0;
 	let runtime!: NativeSessionRuntime;
 	const createTransport = (_config: typeof config, callbacks: { onState(state: "connected"): void }): NativeTransport => {
 		transports++;
@@ -189,7 +209,7 @@ function createHarness(
 		}),
 		createAttachmentPipeline: () => ({
 			async prepare(msg: QQInboundMessage) {
-				return { prompt: msg.text, images: [], resources: [], async cleanup() {} };
+				return { prompt: msg.text, images: [], resources: [], async cleanup() { cleanups++; } };
 			},
 		}) as never,
 	});
@@ -223,9 +243,10 @@ function createHarness(
 		},
 		isIdle: () => idle,
 		hasPendingMessages: () => false,
+		getContextUsage: () => ({ tokens: 1000, contextWindow: 32_000, percent: 3 }),
 	} as unknown as ExtensionCommandContext;
 	runtime.onSessionStart(context);
-	return { runtime, context, pi, sent, injected, setModels, setThinkingLevels, transportCount: () => transports };
+	return { runtime, context, pi, sent, injected, setModels, setThinkingLevels, transportCount: () => transports, cleanupCount: () => cleanups };
 }
 
 function message(id: string, text: string): QQInboundMessage {

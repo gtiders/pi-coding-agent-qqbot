@@ -1,88 +1,74 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeConfig, validateEnabled } from "../../src/infrastructure/config/normalize-config";
+import { normalizeConfig, validateConfig } from "../../src/infrastructure/config/normalize-config.ts";
 
-test("normalizes schema 4 defaults and ignores removed compatibility fields", () => {
-	const defaults = normalizeConfig({
-		enabled: true,
-		autoStart: false,
-		allowCommands: false,
-		appId: "test",
-		clientSecret: "test",
-		commands: { modelPageSize: 99 },
+test("normalizes minimal schema 5 defaults without product-level limits", () => {
+	const config = normalizeConfig({ appId: " app ", clientSecret: "secret", ownerOpenId: " USER-1 " });
+	assert.equal(config.schemaVersion, 5);
+	assert.equal(config.appId, "app");
+	assert.equal(config.ownerOpenId, "USER-1");
+	assert.deepEqual(config.inboundMedia, { deniedKinds: [], deniedExtensions: [] });
+	assert.deepEqual(config.outboundMedia, {
+		enabled: false,
+		deniedRoots: [],
+		deniedKinds: [],
+		deniedExtensions: [],
 	});
-	assert.equal(defaults.schemaVersion, 4);
-	assert.equal("startup" in defaults, false);
-	assert.equal("sessions" in defaults, false);
-	assert.equal(defaults.commands.modelPageSize, 6);
-	assert.equal(defaults.progress.enabled, true);
-	assert.equal(defaults.progress.ackAfterMs, 3000);
-	assert.equal(defaults.outboundMedia.enabled, false);
-	assert.equal(defaults.outboundMedia.adminsOnly, true);
-	assert.deepEqual(defaults.outboundMedia.deniedRoots, []);
-	assert.equal(defaults.link.conflictPolicy, "ask");
-
-	const current = normalizeConfig({
-		schemaVersion: 1,
-		enabled: true,
-		appId: "test",
-		clientSecret: "test",
-		startup: { mode: "auto" },
-		commands: { modelPageSize: 0 },
-	});
-	assert.equal(current.schemaVersion, 4);
-	assert.equal("startup" in current, false);
-	assert.equal(current.commands.modelPageSize, 1);
+	assert.equal("maxQueueSize" in config, false);
+	assert.equal("commands" in config, false);
+	assert.equal("media" in config, false);
+	assert.equal(validateConfig(config), undefined);
 });
 
-test("requires exactly one C2C user and rejects group configuration", () => {
-	const valid = normalizeConfig({
-		enabled: true,
-		appId: "test",
+test("migrates meaningful schema 4 policy and discards obsolete limits", () => {
+	const config = normalizeConfig({
+		schemaVersion: 4,
+		appId: "app",
 		clientSecret: "secret",
 		allowUsers: ["USER-1"],
-		allowGroups: [],
-		commands: { allowInGroups: false },
-		link: { conflictPolicy: "takeover" },
-	});
-	assert.equal(validateEnabled(valid), undefined);
-	assert.equal(valid.link.conflictPolicy, "takeover");
-	assert.match(validateEnabled(normalizeConfig({ ...valid, allowUsers: [] })) ?? "", /exactly one/);
-	assert.match(validateEnabled(normalizeConfig({ ...valid, allowUsers: ["A", "B"] })) ?? "", /exactly one/);
-	assert.match(validateEnabled(normalizeConfig({ ...valid, allowGroups: ["GROUP"] })) ?? "", /allowGroups/);
-	assert.match(validateEnabled(normalizeConfig({ ...valid, commands: { ...valid.commands, allowInGroups: true } })) ?? "", /allowInGroups/);
-});
-
-test("normalizes progress settings", () => {
-	const config = normalizeConfig({
-		enabled: true,
-		appId: "test",
-		clientSecret: "test",
-		progress: { enabled: false, ackAfterMs: 5000 },
-	});
-	assert.equal(config.progress.enabled, false);
-	assert.equal(config.progress.ackAfterMs, 5000);
-});
-
-test("normalizes outbound media limits", () => {
-	const config = normalizeConfig({
-		enabled: true,
-		appId: "test",
-		clientSecret: "test",
+		debug: true,
+		media: {
+			image: { enabled: false, maxBytes: 1 },
+			voice: { enabled: true, stt: { baseUrl: "https://stt.example/v1/", apiKeyEnv: "STT_KEY", model: "whisper", timeoutMs: 1 } },
+			documents: { enabled: true, allowExtensions: [".txt"], maxPdfPages: 1 },
+			maxAttachments: 1,
+		},
 		outboundMedia: {
 			enabled: true,
-			deniedRoots: [" /private/keys ", "", "/private/keys"],
-			allowedRoots: ["/legacy/is/ignored"],
-			maxFilesPerTurn: 99,
-			maxImageBytes: 999 * 1024 * 1024,
-			uploadTimeoutMs: 1,
+			images: false,
+			files: true,
+			deniedRoots: [" C:/private ", "C:/private"],
+			maxFilesPerTurn: 1,
 		},
 	});
-	assert.equal(config.outboundMedia.enabled, true);
-	assert.deepEqual(config.outboundMedia.deniedRoots, ["/private/keys"]);
-	assert.equal("allowedRoots" in config.outboundMedia, false);
-	assert.equal(config.outboundMedia.maxFilesPerTurn, 3);
-	assert.equal(config.outboundMedia.maxImageBytes, 25 * 1024 * 1024);
-	assert.equal(config.outboundMedia.uploadTimeoutMs, 5000);
+	assert.equal(config.ownerOpenId, "USER-1");
+	assert.deepEqual(config.inboundMedia.deniedKinds, ["image"]);
+	assert.deepEqual(config.outboundMedia.deniedKinds, ["image"]);
+	assert.deepEqual(config.outboundMedia.deniedRoots, ["C:/private"]);
+	assert.deepEqual(config.inboundMedia.stt, { baseUrl: "https://stt.example/v1", apiKeyEnv: "STT_KEY", model: "whisper" });
+	assert.equal(config.logging.level, "debug");
+	assert.equal("maxFilesPerTurn" in config.outboundMedia, false);
+});
+
+test("normalizes deny lists as blacklists", () => {
+	const config = normalizeConfig({
+		appId: "app",
+		clientSecret: "secret",
+		ownerOpenId: "USER-1",
+		inboundMedia: { deniedKinds: ["voice", "VOICE", "invalid"], deniedExtensions: ["exe", ".ZIP", "", "bad/path"] },
+		outboundMedia: { enabled: true, deniedKinds: ["video"], deniedExtensions: [".key", "key"] },
+		logging: { level: "error" },
+	});
+	assert.deepEqual(config.inboundMedia.deniedKinds, ["voice"]);
+	assert.deepEqual(config.inboundMedia.deniedExtensions, [".exe", ".zip"]);
+	assert.deepEqual(config.outboundMedia.deniedKinds, ["video"]);
+	assert.deepEqual(config.outboundMedia.deniedExtensions, [".key"]);
+	assert.equal(config.logging.level, "error");
+});
+
+test("requires credentials and exactly one owner identity", () => {
+	assert.match(validateConfig(normalizeConfig({ ownerOpenId: "USER" })) ?? "", /appId/);
+	assert.match(validateConfig(normalizeConfig({ appId: "app", ownerOpenId: "USER" })) ?? "", /clientSecret/);
+	assert.match(validateConfig(normalizeConfig({ appId: "app", clientSecret: "secret" })) ?? "", /ownerOpenId/);
 });

@@ -12,66 +12,27 @@ export interface QQMediaSttConfig {
 	/** Name of the environment variable containing the API key. */
 	apiKeyEnv: string;
 	model: string;
-	timeoutMs: number;
+}
+
+export type QQMediaKind = "image" | "video" | "voice" | "file";
+
+export interface QQMediaDenyPolicy {
+	/** Media kinds blocked by user policy. Empty means no kind is blocked. */
+	deniedKinds: QQMediaKind[];
+	/** Lower-case filename extensions blocked by user policy. Empty means no extension is blocked. */
+	deniedExtensions: string[];
 }
 
 export interface QQOutboundMediaConfig {
 	enabled: boolean;
-	adminsOnly: boolean;
-	allowPrivate: boolean;
-	allowGroups: boolean;
 	/** Canonical directory roots that may never be sent to QQ. Empty allows every readable path. */
 	deniedRoots: string[];
-	images: boolean;
-	files: boolean;
-	maxFilesPerTurn: number;
-	maxImageBytes: number;
-	maxFileBytes: number;
-	maxTotalBytes: number;
-	uploadTimeoutMs: number;
+	deniedKinds: QQMediaKind[];
+	deniedExtensions: string[];
 }
 
-export interface QQMediaConfig {
-	enabled: boolean;
-	maxAttachments: number;
-	maxTotalBytes: number;
-	downloadTimeoutMs: number;
-	image: {
-		enabled: boolean;
-		maxBytes: number;
-	};
-	voice: {
-		enabled: boolean;
-		preferQQAsr: boolean;
-		maxBytes: number;
-		stt?: QQMediaSttConfig;
-	};
-	documents: {
-		enabled: boolean;
-		allowExtensions: string[];
-		maxTxtBytes: number;
-		maxPdfBytes: number;
-		maxDocBytes: number;
-		maxPdfPages: number;
-		maxExtractedChars: number;
-	};
-}
-
-export type QQReplyFormat = "auto" | "plain";
-
-/** Optional slow-task progress feedback sent as a passive QQ reply. */
-export interface QQProgressConfig {
-	/** Send one "processing" ack if the agent task is still running after ackAfterMs. */
-	enabled: boolean;
-	/** Delay before the slow-task ack. 0 sends as soon as the run starts. */
-	ackAfterMs: number;
-}
-
-export interface QQCommandConfig {
-	allowInGroups: boolean;
-	buttons: boolean;
-	maxListItems: number;
-	modelPageSize: number;
+export interface QQInboundMediaConfig extends QQMediaDenyPolicy {
+	stt?: QQMediaSttConfig;
 }
 
 export interface QQLinkConfig {
@@ -80,28 +41,16 @@ export interface QQLinkConfig {
 
 export interface PiAgentQQBotConfig {
 	/** Persisted config schema. */
-	schemaVersion: 4;
-	enabled: boolean;
+	schemaVersion: 5;
 	appId: string;
 	clientSecret: string;
-	sandbox?: boolean | undefined;
-	allowUsers: string[];
-	allowGroups: string[];
-	replyPrefix?: string | undefined;
-	maxQueueSize?: number | undefined;
-	sendBusyNotice?: boolean | undefined;
-	commands: QQCommandConfig;
+	sandbox: boolean;
+	ownerOpenId: string;
 	link: QQLinkConfig;
-	/** Include a compact execution summary after the final answer. */
-	showProcess?: boolean | undefined;
-	/** Prefer native QQ Markdown with a safe plain-text fallback, or force plain text. */
-	replyFormat: QQReplyFormat;
-	/** Slow-task progress ack inside the passive-reply budget. */
-	progress: QQProgressConfig;
+	inboundMedia: QQInboundMediaConfig;
 	/** Local computer -> current QQ conversation rich-media delivery policy. */
 	outboundMedia: QQOutboundMediaConfig;
-	media: QQMediaConfig;
-	debug?: boolean | undefined;
+	logging: { level: "error" | "info" | "debug" };
 }
 
 export interface QQAttachment {
@@ -137,6 +86,7 @@ export type PreparedAttachment =
 			filename: string;
 			status: AttachmentStatus;
 			mimeType?: string | undefined;
+			localPath?: string | undefined;
 			note?: string | undefined;
 			errorCode?: string | undefined;
 	  }
@@ -146,6 +96,8 @@ export type PreparedAttachment =
 			status: AttachmentStatus;
 			transcript?: string | undefined;
 			source?: "qq-asr" | "stt" | undefined;
+			mimeType?: string | undefined;
+			localPath?: string | undefined;
 			note?: string | undefined;
 			errorCode?: string | undefined;
 	  }
@@ -154,16 +106,19 @@ export type PreparedAttachment =
 			filename: string;
 			status: AttachmentStatus;
 			extractedText?: string | undefined;
+			localPath?: string | undefined;
 			truncated?: boolean | undefined;
 			note?: string | undefined;
 			errorCode?: string | undefined;
 	  }
 	| {
-			kind: "unsupported";
+			kind: "file";
 			filename: string;
-			status: "rejected";
-			reason: string;
-			errorCode: string;
+			status: AttachmentStatus;
+			mimeType?: string | undefined;
+			localPath?: string | undefined;
+			note?: string | undefined;
+			errorCode?: string | undefined;
 	  };
 
 export interface PreparedQQMessage {
@@ -215,9 +170,6 @@ export type ConnectionState =
 	| "connected"
 	| "error";
 
-export type QQAttachmentEventKind = "attachment_start" | "attachment_progress" | "attachment_end" | "attachment_rejected";
-export type QQOutboundEventKind = "outbound_start" | "outbound_uploaded" | "outbound_sent" | "outbound_failed";
-
 export interface QQMediaUploadResult {
 	fileInfo: string;
 	fileUuid?: string | undefined;
@@ -226,7 +178,7 @@ export interface QQMediaUploadResult {
 
 export interface QQOutboundDeliveryRecord {
 	filename: string;
-	kind: "image" | "file";
+	kind: QQMediaKind;
 	bytes: number;
 	status: "sent" | "failed" | "unknown";
 	errorCode?: string | undefined;

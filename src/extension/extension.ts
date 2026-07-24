@@ -6,7 +6,7 @@ import type {
 import { Type } from "typebox";
 
 import { ConfigRepositoryError, FileConfigRepository } from "../infrastructure/config/config-repository.ts";
-import { CONFIG_PATH, validateEnabled } from "../infrastructure/config/normalize-config.ts";
+import { CONFIG_PATH, validateConfig } from "../infrastructure/config/normalize-config.ts";
 import type { PiAgentQQBotConfig } from "../application/ports.ts";
 import { NativeSessionRuntime } from "./native-session-runtime.ts";
 import { formatBytes } from "../infrastructure/media/outbound-media.ts";
@@ -35,7 +35,7 @@ export default function registerExtension(pi: ExtensionAPI): void {
 			return {
 				content: [{
 					type: "text",
-					text: `QQ API 已确认发送${record.kind === "image" ? "图片" : "文件"} ${record.filename}（${formatBytes(record.bytes)}）。`,
+					text: `QQ API 已确认发送${mediaLabel(record.kind)} ${record.filename}（${formatBytes(record.bytes)}）。`,
 				}],
 				details: record,
 			};
@@ -43,11 +43,7 @@ export default function registerExtension(pi: ExtensionAPI): void {
 	});
 
 	const requireConfig = (ctx: ExtensionCommandContext): boolean => {
-		if (!currentConfig.enabled) {
-			ctx.ui.notify("pi-agent-qqbot 未启用，请在 ~/.pi/agent/pi-agent-qqbot.json 设置 enabled=true", "warning");
-			return false;
-		}
-		const invalid = validateEnabled(currentConfig);
+		const invalid = validateConfig(currentConfig);
 		if (invalid) {
 			ctx.ui.notify(`pi-agent-qqbot 配置无效：${invalid}`, "warning");
 			return false;
@@ -131,7 +127,7 @@ export default function registerExtension(pi: ExtensionAPI): void {
 			currentConfig = loaded.config;
 			runtime.configure(currentConfig);
 			runtime.onSessionStart(ctx);
-			if (loaded.missing && ctx.hasUI) ctx.ui.notify("pi-agent-qqbot 未找到配置，保持禁用。", "info");
+			if (loaded.missing && ctx.hasUI) ctx.ui.notify("pi-agent-qqbot 未找到配置。", "info");
 		} catch (error) {
 			currentConfig = runtimeConfigFallback();
 			if (ctx.hasUI) {
@@ -157,20 +153,20 @@ export default function registerExtension(pi: ExtensionAPI): void {
 
 function runtimeConfigFallback(): PiAgentQQBotConfig {
 	return {
-		schemaVersion: 4 as const,
-		enabled: false,
+		schemaVersion: 5,
 		appId: "",
 		clientSecret: "",
-		allowUsers: [],
-		allowGroups: [],
-		commands: { allowInGroups: false, buttons: true, maxListItems: 5, modelPageSize: 6 },
-		link: { conflictPolicy: "ask" as const },
-		replyFormat: "auto" as const,
-		progress: { enabled: false, ackAfterMs: 0 },
-		outboundMedia: { enabled: false, adminsOnly: false, allowPrivate: false, allowGroups: false, deniedRoots: [], images: false, files: false, maxFilesPerTurn: 1, maxImageBytes: 1, maxFileBytes: 1, maxTotalBytes: 1, uploadTimeoutMs: 5000 },
-		media: { enabled: false, maxAttachments: 1, maxTotalBytes: 1, downloadTimeoutMs: 1000, image: { enabled: false, maxBytes: 1 }, voice: { enabled: false, preferQQAsr: false, maxBytes: 1 }, documents: { enabled: false, allowExtensions: [".txt"], maxTxtBytes: 1, maxPdfBytes: 1, maxDocBytes: 1, maxPdfPages: 1, maxExtractedChars: 1 } },
-		debug: false,
+		sandbox: true,
+		ownerOpenId: "",
+		link: { conflictPolicy: "ask" },
+		inboundMedia: { deniedKinds: [], deniedExtensions: [] },
+		outboundMedia: { enabled: false, deniedRoots: [], deniedKinds: [], deniedExtensions: [] },
+		logging: { level: "info" },
 	};
+}
+
+function mediaLabel(kind: "image" | "video" | "voice" | "file"): string {
+	return kind === "image" ? "图片" : kind === "video" ? "视频" : kind === "voice" ? "语音" : "文件";
 }
 
 function safeError(error: unknown): string {

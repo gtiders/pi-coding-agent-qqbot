@@ -5,7 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import test from "node:test";
 
 import { normalizeConfig } from "../../src/infrastructure/config/normalize-config";
-import { normalizeInputPath, QQOutboundDeliveryContext, QQOutboundMediaError, resolveUnblockedLocalFile } from "../../src/infrastructure/media/outbound-media";
+import { normalizeInputPath, QQOutboundDeliveryContext, QQOutboundMediaError } from "../../src/infrastructure/media/outbound-media";
 
 test("uses host-native paths and preserves outbound delivery behavior", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-agent-qqbot-outbound-test-"));
@@ -20,17 +20,11 @@ test("uses host-native paths and preserves outbound delivery behavior", async ()
 		const normalized = normalizeInputPath(windowsLookingPath, root);
 		assert.equal(normalized, expectedNativePath);
 		assert.equal(normalized.replaceAll("\\", "/").includes("/mnt/c/"), false);
-		assert.equal(await resolveUnblockedLocalFile(textPath, root, []), textPath);
-		await assert.rejects(
-			() => resolveUnblockedLocalFile(textPath, root, [root]),
-			(error: unknown) => error instanceof QQOutboundMediaError && error.code === "path_denied",
-		);
-
-		const uploads: Array<{ fileType: number; dataLength: number }> = [];
+		const uploads: Array<{ fileType: number; bytes: number }> = [];
 		const sends: Array<{ fileInfo: string; msgSeq: number }> = [];
 		const api = {
-			async uploadMedia(_target: unknown, fileType: number, fileData: string) {
-				uploads.push({ fileType, dataLength: fileData.length });
+			async uploadLocalFile(_target: unknown, fileType: number, file: { size: number }) {
+				uploads.push({ fileType, bytes: file.size });
 				return { fileInfo: `file-info-${uploads.length}`, ttl: 86400 };
 			},
 			async sendMedia(_target: unknown, fileInfo: string, msgSeq: number) {
@@ -38,10 +32,9 @@ test("uses host-native paths and preserves outbound delivery behavior", async ()
 			},
 		};
 		const config = normalizeConfig({
-			enabled: true,
 			appId: "test",
 			clientSecret: "test",
-			allowUsers: ["ADMIN"],
+			ownerOpenId: "ADMIN",
 			outboundMedia: { enabled: true, deniedRoots: [] },
 		});
 		let nextSeq = 1;
@@ -67,6 +60,51 @@ test("uses host-native paths and preserves outbound delivery behavior", async ()
 		assert.equal(imageRecord.status, "sent");
 		assert.equal(uploads[1]?.fileType, 1);
 		assert.deepEqual(sends[1], { fileInfo: "file-info-2", msgSeq: 2 });
+
+		const deniedExtension = new QQOutboundDeliveryContext({
+			config: normalizeConfig({
+				appId: "test",
+				clientSecret: "test",
+				ownerOpenId: "ADMIN",
+				outboundMedia: { enabled: true, deniedExtensions: [".txt"] },
+			}),
+			cwd: root,
+			message: { id: "message-denied", type: "private", text: "send it", userOpenId: "ADMIN", attachments: [], raw: {}, receivedAt: Date.now() },
+			target: { type: "private", userOpenId: "ADMIN", msgId: "message-denied", createdAt: Date.now() },
+			api: api as never,
+			fake: false,
+			hasMessageSequenceCapacity: () => true,
+			reserveMessageSequence: () => 1,
+		});
+		await assert.rejects(
+			() => deniedExtension.sendLocalFile(textPath),
+			(error: unknown) => error instanceof QQOutboundMediaError && error.code === "outbound_extension_denied",
+		);
+
+		const oversizedImagePath = join(root, "oversized.png");
+		await writeFile(oversizedImagePath, Buffer.concat([
+			Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+			Buffer.alloc(20 * 1024 * 1024),
+		]));
+		const deniedDowngradedFile = new QQOutboundDeliveryContext({
+			config: normalizeConfig({
+				appId: "test",
+				clientSecret: "test",
+				ownerOpenId: "ADMIN",
+				outboundMedia: { enabled: true, deniedKinds: ["file"] },
+			}),
+			cwd: root,
+			message: { id: "message-denied-kind", type: "private", text: "send it", userOpenId: "ADMIN", attachments: [], raw: {}, receivedAt: Date.now() },
+			target: { type: "private", userOpenId: "ADMIN", msgId: "message-denied-kind", createdAt: Date.now() },
+			api: api as never,
+			fake: false,
+			hasMessageSequenceCapacity: () => true,
+			reserveMessageSequence: () => 1,
+		});
+		await assert.rejects(
+			() => deniedDowngradedFile.sendLocalFile(oversizedImagePath),
+			(error: unknown) => error instanceof QQOutboundMediaError && error.code === "outbound_kind_denied",
+		);
 
 		const unauthorized = new QQOutboundDeliveryContext({
 			config,

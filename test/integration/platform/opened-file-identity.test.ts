@@ -21,7 +21,7 @@ test("opens and reads a regular file when no roots are denied", async () => {
 		await writeFile(path, "report");
 		const opened = await openVerifiedLocalFile({ candidate: path, deniedRoots: [] });
 		try {
-			assert.equal((await opened.read()).toString("utf8"), "report");
+			assert.equal((await opened.readRange(0, opened.size)).toString("utf8"), "report");
 			assert.equal(opened.size, 6);
 			await opened.close();
 			await opened.close();
@@ -60,7 +60,7 @@ test("honors abort before opening and before reading", async () => {
 		});
 		try {
 			await assert.rejects(
-				() => opened.read(),
+				() => opened.readRange(0, opened.size),
 				(error: unknown) => error instanceof LocalFileError && error.code === "operation_aborted",
 			);
 		} finally {
@@ -187,7 +187,7 @@ test("detects pathname replacement after opening", async (context) => {
 		});
 		try {
 			await assert.rejects(
-				() => opened.read(),
+				() => opened.readRange(0, opened.size),
 				(error: unknown) => error instanceof LocalFileError && error.code === "file_changed",
 			);
 		} finally {

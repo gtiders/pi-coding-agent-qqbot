@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 const MAX_REDIRECTS = 5;
 const MAX_RETRIES = 2;
 const RETRY_BASE_MS = 300;
+const DOWNLOAD_STALL_TIMEOUT_MS = 60_000;
 
 export type SniffedMedia =
 	| { kind: "image"; mimeType: "image/jpeg" | "image/png" | "image/gif"; extension: string }
@@ -26,19 +27,16 @@ export interface DownloadedAttachment {
 	path: string;
 	bytes: number;
 	media: SniffedMedia;
-	responseContentType?: string | undefined;
 }
 
 export interface AttachmentDownloaderOptions {
 	runtimeId: string;
 	messageId: string;
-	timeoutMs: number;
 	signal: AbortSignal;
 	onProgress?: ((bytes: number) => void) | undefined;
 	request?: (
 		sourceUrl: string,
 		signal: AbortSignal,
-		maxBytes: number,
 	) => Promise<{ response: IncomingMessage; url: URL }>;
 }
 
@@ -53,44 +51,30 @@ export class AttachmentDownloadError extends Error {
 
 export class AttachmentDownloader {
 	private readonly workspace: string;
-	private readonly timeoutMs: number;
 	private readonly signal: AbortSignal;
 	private readonly onProgress: ((bytes: number) => void) | undefined;
 	private readonly request: NonNullable<AttachmentDownloaderOptions["request"]>;
-	private totalBytes = 0;
 
 	constructor(options: AttachmentDownloaderOptions) {
 		this.workspace = join(tmpdir(), "pi-agent-qqbot", safeSegment(options.runtimeId), safeSegment(options.messageId));
-		this.timeoutMs = options.timeoutMs;
 		this.signal = options.signal;
 		this.onProgress = options.onProgress;
 		this.request = options.request ?? requestWithValidatedRedirects;
 	}
 
-	async download(url: string, maxBytes: number, remainingTotalBytes: number): Promise<DownloadedAttachment> {
-		const effectiveMax = Math.max(0, Math.min(maxBytes, remainingTotalBytes));
-		if (effectiveMax <= 0) throw new AttachmentDownloadError("size_limit", "消息附件总大小超过限制");
+	async download(url: string): Promise<DownloadedAttachment> {
 		await mkdir(this.workspace, { recursive: true, mode: 0o700 });
-
-		const downloaded = await this.downloadWithRetries(url, effectiveMax);
-		this.totalBytes += downloaded.bytes;
-		return downloaded;
+		return this.downloadWithRetries(url);
 	}
 
 	async downloadFirst(
 		urls: string[],
-		maxBytes: number,
-		remainingTotalBytes: number,
 	): Promise<DownloadedAttachment> {
-		const effectiveMax = Math.max(0, Math.min(maxBytes, remainingTotalBytes));
-		if (effectiveMax <= 0) throw new AttachmentDownloadError("size_limit", "消息附件总大小超过限制");
 		await mkdir(this.workspace, { recursive: true, mode: 0o700 });
 		let lastError: unknown;
 		for (const url of urls) {
 			try {
-				const downloaded = await this.downloadWithRetries(url, effectiveMax);
-				this.totalBytes += downloaded.bytes;
-				return downloaded;
+				return await this.downloadWithRetries(url);
 			} catch (err) {
 				lastError = err;
 			}
@@ -98,19 +82,15 @@ export class AttachmentDownloader {
 		throw normalizeDownloadError(lastError);
 	}
 
-	get downloadedBytes(): number {
-		return this.totalBytes;
-	}
-
 	async cleanup(): Promise<void> {
 		await rm(this.workspace, { recursive: true, force: true }).catch(() => undefined);
 	}
 
-	private async downloadWithRetries(sourceUrl: string, maxBytes: number): Promise<DownloadedAttachment> {
+	private async downloadWithRetries(sourceUrl: string): Promise<DownloadedAttachment> {
 		let lastError: unknown;
 		for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
 			try {
-				return await this.downloadAttempt(sourceUrl, maxBytes);
+				return await this.downloadAttempt(sourceUrl);
 			} catch (err) {
 				lastError = err;
 				if (!isRetryable(err) || attempt === MAX_RETRIES) break;
@@ -120,37 +100,37 @@ export class AttachmentDownloader {
 		throw normalizeDownloadError(lastError);
 	}
 
-	private async downloadAttempt(sourceUrl: string, maxBytes: number): Promise<DownloadedAttachment> {
+	private async downloadAttempt(sourceUrl: string): Promise<DownloadedAttachment> {
 		const controller = new AbortController();
 		if (this.signal.aborted) throw new AttachmentDownloadError("aborted", "附件处理已取消");
 		const onAbort = () => controller.abort(this.signal.reason);
 		this.signal.addEventListener("abort", onAbort, { once: true });
-		const timeout = setTimeout(() => controller.abort(new Error("download timeout")), this.timeoutMs);
+		let timeout = setTimeout(() => controller.abort(new Error("download stalled")), DOWNLOAD_STALL_TIMEOUT_MS);
+		const resetTimeout = () => {
+			clearTimeout(timeout);
+			timeout = setTimeout(() => controller.abort(new Error("download stalled")), DOWNLOAD_STALL_TIMEOUT_MS);
+		};
 		let filePath: string | undefined;
 		try {
-			const { response } = await this.request(sourceUrl, controller.signal, maxBytes);
+			const { response } = await this.request(sourceUrl, controller.signal);
+			resetTimeout();
 
 			filePath = join(this.workspace, randomUUID());
 			let bytes = 0;
 			const body = response;
 			body.on("data", (chunk: Buffer | Uint8Array | string) => {
 				bytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
-				if (bytes > maxBytes) {
-					controller.abort(new AttachmentDownloadError("size_limit", `附件超过大小限制（${formatBytes(maxBytes)}）`));
-					return;
-				}
+				resetTimeout();
 				this.onProgress?.(bytes);
 			});
 			await pipeline(body, createWriteStream(filePath, { flags: "wx", mode: 0o600 }), { signal: controller.signal });
 			await chmod(filePath, 0o600);
 			const info = await stat(filePath);
-			if (info.size > maxBytes) throw new AttachmentDownloadError("size_limit", "附件超过大小限制");
 			const head = await readHead(filePath, 8192);
 			return {
 				path: filePath,
 				bytes: info.size,
 				media: sniffMedia(head, headerValue(response, "content-type"), sourceUrl),
-				responseContentType: headerValue(response, "content-type")?.split(";", 1)[0]?.trim().toLowerCase(),
 			};
 		} catch (err) {
 			if (filePath) await rm(filePath, { force: true }).catch(() => undefined);
@@ -170,7 +150,6 @@ export class AttachmentDownloader {
 async function requestWithValidatedRedirects(
 	sourceUrl: string,
 	signal: AbortSignal,
-	maxBytes: number,
 ): Promise<{ response: IncomingMessage; url: URL }> {
 	let current = parseAndValidateUrl(sourceUrl);
 	for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
@@ -197,11 +176,6 @@ async function requestWithValidatedRedirects(
 				`附件下载失败（HTTP ${status}）`,
 			);
 		}
-		const length = parseContentLength(headerValue(response, "content-length") ?? null);
-		if (length !== undefined && length > maxBytes) {
-			response.resume();
-			throw new AttachmentDownloadError("size_limit", `附件超过大小限制（${formatBytes(maxBytes)}）`);
-		}
 		return { response, url: current };
 	}
 	throw new AttachmentDownloadError("too_many_redirects", "附件下载重定向次数过多");
@@ -216,7 +190,7 @@ async function requestPinned(url: URL, signal: AbortSignal): Promise<IncomingMes
 			{
 				method: "GET",
 				signal,
-				headers: { Accept: "*/*", "User-Agent": "pi-agent-qqbot/0.2" },
+				headers: { Accept: "*/*", "User-Agent": "pi-agent-qqbot/0.7" },
 				lookup: (_hostname, options, callback) => {
 					const wantsAll = typeof options === "object" && options !== null && options.all === true;
 					if (wantsAll) callback(null, addresses);
@@ -254,10 +228,6 @@ export function parseAndValidateUrl(value: string): URL {
 	if (url.username || url.password) throw new AttachmentDownloadError("invalid_url", "附件 URL 不允许包含用户名或密码");
 	if (!url.hostname) throw new AttachmentDownloadError("invalid_url", "附件 URL 缺少主机名");
 	return url;
-}
-
-export async function validatePublicHost(hostname: string): Promise<void> {
-	await resolvePublicHost(hostname);
 }
 
 async function resolvePublicHost(hostname: string): Promise<Array<{ address: string; family: number }>> {
@@ -361,15 +331,6 @@ export function safeOriginalFilename(value: string): string {
 	return (cleaned || "attachment").slice(0, 180);
 }
 
-export function safeUrlForLog(value: string): string {
-	try {
-		const url = new URL(value);
-		return `${url.origin}${url.pathname}`;
-	} catch {
-		return "(invalid-url)";
-	}
-}
-
 async function readHead(path: string, length: number): Promise<Uint8Array> {
 	const handle = await open(path, "r");
 	try {
@@ -379,12 +340,6 @@ async function readHead(path: string, length: number): Promise<Uint8Array> {
 	} finally {
 		await handle.close();
 	}
-}
-
-function parseContentLength(value: string | null): number | undefined {
-	if (!value) return undefined;
-	const n = Number(value);
-	return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
 
 function looksTextual(data: Buffer): boolean {
@@ -420,10 +375,6 @@ function normalizeDownloadError(err: unknown): AttachmentDownloadError {
 
 function safeError(err: unknown): string {
 	return err instanceof Error ? err.message.replace(/https?:\/\/\S+/g, "[URL]") : String(err);
-}
-
-function formatBytes(bytes: number): string {
-	return bytes >= 1024 * 1024 ? `${Math.round(bytes / 1024 / 1024)} MiB` : `${Math.round(bytes / 1024)} KiB`;
 }
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {

@@ -6,6 +6,11 @@ Package: `pi-agent-qqbot`
 Pi SDK baseline: `@earendil-works/pi-coding-agent` 0.81.1
 Rollback point: `pre-native-session-link-20260722` (`34bf6fe`)
 
+> Configuration and media-policy sections in this document are superseded by
+> [2026-07-23-qqbot-schema5-config-design.md](./2026-07-23-qqbot-schema5-config-design.md).
+> The native-session architecture and the rule requiring approval before any Pi
+> core change remain authoritative.
+
 ## 1. Purpose
 
 Replace the independent QQ Agent session architecture with a single-user C2C bridge into the currently active native Pi session.

@@ -1,25 +1,18 @@
-import { realpath } from "node:fs/promises";
-import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, extname, isAbsolute, resolve } from "node:path";
 
-import { QQApi, QQApiError } from "../qq/api";
-import {
-	LocalFileError,
-	openVerifiedLocalFile,
-	type OpenedLocalFile,
-} from "../platform/opened-file-identity";
+import { QQApi, QQApiError } from "../qq/api.ts";
+import { LocalFileError, openVerifiedLocalFile, type OpenedLocalFile } from "../platform/opened-file-identity.ts";
 import type {
 	PiAgentQQBotConfig,
 	QQInboundMessage,
+	QQMediaKind,
 	QQOutboundDeliveryRecord,
 	QQReplyTarget,
-} from "../../application/ports";
+} from "../../application/ports.ts";
 
 export type QQOutboundKind = "auto" | "image" | "file";
 
-export interface QQOutboundEvent {
-	stage: "start" | "uploaded" | "sent" | "failed";
-	record: QQOutboundDeliveryRecord;
-}
+const QQ_MEDIA_HARD_LIMIT_BYTES = 200 * 1024 * 1024;
 
 export interface QQOutboundDeliveryOptions {
 	config: PiAgentQQBotConfig;
@@ -31,32 +24,20 @@ export interface QQOutboundDeliveryOptions {
 	fake: boolean;
 	hasMessageSequenceCapacity(): boolean;
 	reserveMessageSequence(): number | undefined;
-	onEvent?(event: QQOutboundEvent): void;
 }
 
 export class QQOutboundMediaError extends Error {
-	readonly code: string;
-	constructor(code: string, message: string) {
+	constructor(readonly code: string, message: string) {
 		super(message);
-		this.code = code;
 	}
 }
 
-/** Per-agent-run delivery context. It is closed before another QQ target can be bound. */
+/** Per-agent-run delivery context. QQ's passive reply budget is the only per-turn count limit. */
 export class QQOutboundDeliveryContext {
-	private readonly options: QQOutboundDeliveryOptions;
 	private readonly recordsValue: QQOutboundDeliveryRecord[] = [];
-	private sentFiles = 0;
-	private totalBytes = 0;
 	private closed = false;
 
-	constructor(options: QQOutboundDeliveryOptions) {
-		this.options = options;
-	}
-
-	get records(): readonly QQOutboundDeliveryRecord[] {
-		return this.recordsValue;
-	}
+	constructor(private readonly options: QQOutboundDeliveryOptions) {}
 
 	close(): void {
 		this.closed = true;
@@ -66,103 +47,77 @@ export class QQOutboundDeliveryContext {
 		let opened: OpenedLocalFile | undefined;
 		let filename = safeFilename(inputPath);
 		let bytes = 0;
-		let mediaKind: "image" | "file" = requestedKind === "image" ? "image" : "file";
+		let mediaKind: QQMediaKind = requestedKind === "image" ? "image" : "file";
 		let phase: "validation" | "upload" | "send" = "validation";
 		try {
 			this.assertAvailable();
 			this.assertAuthorized();
-			if (this.sentFiles >= this.options.config.outboundMedia.maxFilesPerTurn) {
-				throw new QQOutboundMediaError("turn_file_limit", "本回合可发送的文件数量已达到上限");
-			}
 			if (this.options.fake) throw new QQOutboundMediaError("fake_mode", "模拟消息不会读取或上传本地文件");
 			if (!this.options.hasMessageSequenceCapacity()) {
 				throw new QQOutboundMediaError("reply_budget_exhausted", "QQ 被动回复配额不足，无法发送媒体");
 			}
 
-			const candidate = normalizeInputPath(inputPath, this.options.cwd);
 			opened = await openVerifiedLocalFile({
-				candidate,
+				candidate: normalizeInputPath(inputPath, this.options.cwd),
 				deniedRoots: this.options.config.outboundMedia.deniedRoots.map((root) => normalizeInputPath(root, this.options.cwd)),
 				...(this.options.signal ? { signal: this.options.signal } : {}),
 			});
 			filename = safeFilename(opened.path);
 			bytes = opened.size;
-			const absoluteMaxBytes = Math.max(
-				this.options.config.outboundMedia.maxImageBytes,
-				this.options.config.outboundMedia.maxFileBytes,
-			);
-			if (bytes > absoluteMaxBytes) throw new QQOutboundMediaError("file_too_large", `文件超过 ${formatBytes(absoluteMaxBytes)} 限制`);
-			const fileBytes = await opened.read();
-			const detectedImage = detectImage(fileBytes.subarray(0, 16));
-			if (requestedKind === "image" && !detectedImage) {
+			if (bytes > QQ_MEDIA_HARD_LIMIT_BYTES) {
+				throw new QQOutboundMediaError("file_too_large", `文件超过 QQ ${formatBytes(QQ_MEDIA_HARD_LIMIT_BYTES)} 硬限制`);
+			}
+
+			const detectedKind = detectMediaKind(await opened.readRange(0, 32));
+			if (requestedKind === "image" && detectedKind !== "image") {
 				throw new QQOutboundMediaError("unsupported_media_type", "图片必须是有效的 PNG 或 JPEG 文件");
 			}
-			mediaKind = requestedKind === "file" ? "file" : detectedImage ? "image" : "file";
-			if (mediaKind === "image" && !this.options.config.outboundMedia.images) {
-				throw new QQOutboundMediaError("outbound_images_disabled", "本地图片发送已关闭");
-			}
-			if (mediaKind === "file" && !this.options.config.outboundMedia.files) {
-				throw new QQOutboundMediaError("outbound_files_disabled", "本地文件发送已关闭");
-			}
-			const maxBytes = mediaKind === "image"
-				? this.options.config.outboundMedia.maxImageBytes
-				: this.options.config.outboundMedia.maxFileBytes;
-			if (bytes > maxBytes) throw new QQOutboundMediaError("file_too_large", `文件超过 ${formatBytes(maxBytes)} 限制`);
-			if (this.totalBytes + bytes > this.options.config.outboundMedia.maxTotalBytes) {
-				throw new QQOutboundMediaError("turn_total_limit", "本回合发送文件的累计大小超过限制");
-			}
+			mediaKind = requestedKind === "file" ? "file" : detectedKind;
+			this.assertPolicyAllows(filename, mediaKind);
+			const originalKind = mediaKind;
+			mediaKind = downgradeForQQSoftLimit(mediaKind, bytes);
+			if (mediaKind !== originalKind) this.assertPolicyAllows(filename, mediaKind);
 
-			this.emit("start", { filename, kind: mediaKind, bytes, status: "failed" });
 			if (!this.options.api) throw new QQOutboundMediaError("qq_api_unavailable", "QQ API 尚未就绪");
-			const fileData = fileBytes.toString("base64");
 			this.assertAvailable();
 			phase = "upload";
-			const uploaded = await this.options.api.uploadMedia(
+			const uploaded = await this.options.api.uploadLocalFile(
 				this.options.target,
-				mediaKind === "image" ? 1 : 4,
-				fileData,
+				fileTypeFor(mediaKind),
+				opened,
+				filename,
 				this.options.signal,
-				this.options.config.outboundMedia.uploadTimeoutMs,
 			);
-			this.emit("uploaded", { filename, kind: mediaKind, bytes, status: "failed" });
-
 			const msgSeq = this.options.reserveMessageSequence();
 			if (msgSeq === undefined) throw new QQOutboundMediaError("reply_budget_exhausted", "QQ 被动回复配额不足，已取消媒体发送");
 			phase = "send";
 			try {
 				await this.options.api.sendMedia(this.options.target, uploaded.fileInfo, msgSeq, this.options.signal);
-			} catch (err) {
-				if (err instanceof QQApiError && !err.requestAccepted) {
+			} catch (error) {
+				if (error instanceof QQApiError && !error.requestAccepted) {
 					const record = this.failureRecord(filename, mediaKind, bytes, "media_send_unknown", "网络中断，无法确认 QQ 是否收到文件", "unknown");
-					this.emit("failed", record);
 					throw new QQOutboundMediaError(record.errorCode ?? "media_send_unknown", record.note ?? "发送结果未知");
 				}
-				throw err;
+				throw error;
 			}
 
 			const record: QQOutboundDeliveryRecord = { filename, kind: mediaKind, bytes, status: "sent" };
 			this.recordsValue.push(record);
-			this.sentFiles++;
-			this.totalBytes += bytes;
-			this.emit("sent", record);
 			return record;
-		} catch (err) {
-			if (err instanceof LocalFileError) {
-				const mapped = new QQOutboundMediaError(err.code, localFileMessage(err.code));
-				const record = this.failureRecord(filename, mediaKind, bytes, mapped.code, mapped.message);
-				this.emit("failed", record);
+		} catch (error) {
+			if (error instanceof LocalFileError) {
+				const mapped = new QQOutboundMediaError(error.code, localFileMessage(error.code));
+				this.failureRecord(filename, mediaKind, bytes, mapped.code, mapped.message);
 				throw mapped;
 			}
-			if (err instanceof QQOutboundMediaError) {
-				if (!this.recordsValue.some((record) => record.filename === filename && record.errorCode === err.code)) {
-					const record = this.failureRecord(filename, mediaKind, bytes, err.code, err.message);
-					this.emit("failed", record);
+			if (error instanceof QQOutboundMediaError) {
+				if (!this.recordsValue.some((record) => record.filename === filename && record.errorCode === error.code)) {
+					this.failureRecord(filename, mediaKind, bytes, error.code, error.message);
 				}
-				throw err;
+				throw error;
 			}
-			const normalized = normalizeQQError(err, phase);
-			const record = this.failureRecord(filename, mediaKind, bytes, normalized.code, normalized.message);
-			this.emit("failed", record);
+			const normalized = normalizeQQError(error, phase);
+			this.failureRecord(filename, mediaKind, bytes, normalized.code, normalized.message);
 			throw new QQOutboundMediaError(normalized.code, normalized.message);
 		} finally {
 			await opened?.close().catch(() => undefined);
@@ -170,27 +125,30 @@ export class QQOutboundDeliveryContext {
 	}
 
 	private assertAvailable(): void {
-		if (this.closed) throw new QQOutboundMediaError("delivery_context_closed", "当前 QQ 回合已经结束或被停止");
-		if (this.options.signal?.aborted) throw new QQOutboundMediaError("delivery_context_closed", "当前 QQ 回合已经被停止");
+		if (this.closed || this.options.signal?.aborted) {
+			throw new QQOutboundMediaError("delivery_context_closed", "当前 QQ 回合已经结束或被停止");
+		}
 	}
 
 	private assertAuthorized(): void {
+		if (!this.options.config.outboundMedia.enabled) throw new QQOutboundMediaError("outbound_disabled", "电脑文件发送功能尚未启用");
+		if (this.options.message.type !== "private" || this.options.message.userOpenId !== this.options.config.ownerOpenId) {
+			throw new QQOutboundMediaError("outbound_not_authorized", "文件只能发送到已配置的 QQ 所有者私聊");
+		}
+	}
+
+	private assertPolicyAllows(filename: string, kind: QQMediaKind): void {
 		const policy = this.options.config.outboundMedia;
-		if (!policy.enabled) throw new QQOutboundMediaError("outbound_disabled", "电脑文件发送功能尚未启用");
-		if (this.options.message.type === "private" && !policy.allowPrivate) {
-			throw new QQOutboundMediaError("outbound_private_disabled", "私聊文件发送已关闭");
-		}
-		if (this.options.message.type === "group" && !policy.allowGroups) {
-			throw new QQOutboundMediaError("outbound_group_disabled", "群聊文件发送已关闭");
-		}
-		if (policy.adminsOnly && this.options.message.userOpenId !== this.options.config.allowUsers?.[0]) {
-			throw new QQOutboundMediaError("outbound_not_authorized", "只有显式配置的 QQ 管理员可以发送电脑文件");
+		if (policy.deniedKinds.includes(kind)) throw new QQOutboundMediaError("outbound_kind_denied", `已禁止发送 ${kind} 类型文件`);
+		const extension = extname(filename).toLowerCase();
+		if (extension && policy.deniedExtensions.includes(extension)) {
+			throw new QQOutboundMediaError("outbound_extension_denied", `已禁止发送 ${extension} 文件`);
 		}
 	}
 
 	private failureRecord(
 		filename: string,
-		kind: "image" | "file",
+		kind: QQMediaKind,
 		bytes: number,
 		errorCode: string,
 		note: string,
@@ -202,58 +160,30 @@ export class QQOutboundDeliveryContext {
 		this.recordsValue.push(record);
 		return record;
 	}
-
-	private emit(stage: QQOutboundEvent["stage"], record: QQOutboundDeliveryRecord): void {
-		try {
-			this.options.onEvent?.({ stage, record });
-		} catch {
-			// Observation must never change delivery behavior.
-		}
-	}
-}
-
-export async function resolveUnblockedLocalFile(input: string, cwd: string, deniedRoots: string[]): Promise<string> {
-	const normalized = normalizeInputPath(input, cwd);
-	let candidate: string;
-	try {
-		candidate = await realpath(normalized);
-	} catch (err) {
-		const code = (err as NodeJS.ErrnoException).code;
-		if (code === "ENOENT") throw new QQOutboundMediaError("file_not_found", "本地文件不存在");
-		throw new QQOutboundMediaError("path_invalid", "无法解析本地文件路径");
-	}
-	const roots: string[] = [];
-	for (const rootInput of deniedRoots) {
-		try {
-			roots.push(await realpath(normalizeInputPath(rootInput, cwd)));
-		} catch {
-			// A missing denied root cannot contain the already-resolved candidate.
-		}
-	}
-	if (roots.some((root) => isWithinRoot(candidate, root))) {
-		throw new QQOutboundMediaError("path_denied", "文件位于禁止发送的目录中");
-	}
-	return candidate;
 }
 
 export function normalizeInputPath(input: string, cwd: string): string {
 	let value = input.trim();
 	if (value.startsWith("@") && value.length > 1) value = value.slice(1);
-	if (!value || /[\u0000-\u001f\u007f]/.test(value)) {
-		throw new QQOutboundMediaError("path_invalid", "本地文件路径无效");
-	}
+	if (!value || /[\u0000-\u001f\u007f]/.test(value)) throw new QQOutboundMediaError("path_invalid", "本地文件路径无效");
 	return resolve(isAbsolute(value) ? value : resolve(cwd, value));
 }
 
-function isWithinRoot(candidate: string, root: string): boolean {
-	const rel = relative(root, candidate);
-	return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
+function detectMediaKind(header: Buffer): QQMediaKind {
+	if (header.length >= 8 && header.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image";
+	if (header.length >= 3 && header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) return "image";
+	if (header.subarray(4, 8).toString("ascii") === "ftyp") return "video";
+	if (header.subarray(0, 4).toString("ascii") === "OggS" || header.subarray(0, 4).toString("ascii") === "RIFF" || header.subarray(0, 3).toString("ascii") === "ID3") return "voice";
+	return "file";
 }
 
-function detectImage(header: Buffer): "png" | "jpeg" | undefined {
-	if (header.length >= 8 && header.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "png";
-	if (header.length >= 3 && header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) return "jpeg";
-	return undefined;
+function downgradeForQQSoftLimit(kind: QQMediaKind, bytes: number): QQMediaKind {
+	const softLimit = kind === "video" ? 30 * 1024 * 1024 : kind === "file" ? QQ_MEDIA_HARD_LIMIT_BYTES : 20 * 1024 * 1024;
+	return bytes > softLimit ? "file" : kind;
+}
+
+function fileTypeFor(kind: QQMediaKind): 1 | 2 | 3 | 4 {
+	return kind === "image" ? 1 : kind === "video" ? 2 : kind === "voice" ? 3 : 4;
 }
 
 function localFileMessage(code: LocalFileError["code"]): string {
@@ -271,18 +201,17 @@ function localFileMessage(code: LocalFileError["code"]): string {
 }
 
 function safeFilename(path: string): string {
-	return basename(path.replaceAll("\\", "/"))
-		.replace(/[\u0000-\u001f\u007f]/g, "")
-		.slice(0, 120) || "file";
+	return basename(path.replaceAll("\\", "/")).replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 120) || "file";
 }
 
-function normalizeQQError(err: unknown, phase: "validation" | "upload" | "send"): { code: string; message: string } {
-	if (err instanceof QQApiError) {
-		if (err.code === 850019) return { code: "unsupported_media_type", message: "QQ 不支持该富媒体文件格式" };
-		if (err.status === 429 || err.code === 22009) return { code: "reply_budget_exhausted", message: "QQ 回复频率或配额已达上限" };
-		return { code: phase === "send" ? "media_send_failed" : "media_upload_failed", message: sanitizeError(err.message) };
+function normalizeQQError(error: unknown, phase: "validation" | "upload" | "send"): { code: string; message: string } {
+	if (error instanceof QQApiError) {
+		if (error.code === 850019) return { code: "unsupported_media_type", message: "QQ 不支持该富媒体文件格式" };
+		if (error.code === 850031) return { code: "file_too_large", message: "文件超过 QQ 平台大小限制" };
+		if (error.status === 429 || error.code === 22009) return { code: "reply_budget_exhausted", message: "QQ 回复频率或配额已达上限" };
+		return { code: phase === "send" ? "media_send_failed" : "media_upload_failed", message: sanitizeError(error.message) };
 	}
-	return { code: phase === "send" ? "media_send_failed" : "media_upload_failed", message: sanitizeError(err instanceof Error ? err.message : String(err)) };
+	return { code: phase === "send" ? "media_send_failed" : "media_upload_failed", message: sanitizeError(error instanceof Error ? error.message : String(error)) };
 }
 
 function sanitizeError(value: string): string {
