@@ -89,16 +89,15 @@ One `appId` identifies one QQ Bot. The QQ Gateway may technically receive events
 The effective conversation identity is:
 
 ```text
-(appId, "c2c", allowUsers[0])
+(appId, "c2c", ownerOpenId)
 ```
 
 Configuration validation must require:
 
 - `appId` is present.
 - `clientSecret` is present.
-- `allowUsers` contains exactly one non-empty OpenID.
-- `allowGroups` is empty.
-- Group command handling is disabled.
+- `ownerOpenId` contains exactly one non-empty OpenID.
+- Only private C2C messages from `ownerOpenId` are accepted.
 
 Messages from any other user or any group must not enter Pi. They may be ignored or receive a fixed unauthorized response according to existing transport policy, but they must not create state, request access, or invoke Agent work.
 
@@ -340,25 +339,35 @@ The effective MVP configuration is:
 
 ```json
 {
-  "enabled": true,
+  "schemaVersion": 5,
   "appId": "...",
   "clientSecret": "...",
-  "allowUsers": ["one-user-openid"],
-  "allowGroups": [],
-  "commands": {
-    "allowInGroups": false
-  },
+  "sandbox": false,
+  "ownerOpenId": "one-user-openid",
   "link": {
     "conflictPolicy": "ask"
+  },
+  "inboundMedia": {
+    "deniedKinds": [],
+    "deniedExtensions": []
+  },
+  "outboundMedia": {
+    "enabled": false,
+    "deniedRoots": [],
+    "deniedKinds": [],
+    "deniedExtensions": []
+  },
+  "logging": {
+    "level": "info"
   }
 }
 ```
 
 Independent session fields such as mode, scope, restore, resident capacity, and idle disposal are removed from the domain model because QQ no longer owns sessions.
 
-Automatic startup settings are removed from behavior. Unknown legacy fields may be ignored by the config reader, but no code path may use them to auto-start QQ or create QQ session storage.
+Automatic startup settings are removed from behavior. Only explicit schema 5 is accepted; older or unspecified schemas are rejected without migration.
 
-Outbound local-file paths use a denylist after the outbound feature and sender checks pass. An empty `deniedRoots` allows every regular file readable by the Pi process. A candidate is rejected when its canonical real path is equal to or below a canonical denied root. Symlink/junction resolution, hard-link rejection, open-handle identity checks, rename-race checks, size limits, and reply-budget limits remain mandatory. Legacy `allowedRoots` is ignored by schema 4 and must never be interpreted as a denylist.
+Outbound local-file paths use a denylist after the outbound feature and sender checks pass. An empty `deniedRoots` allows every regular file readable by the Pi process. A candidate is rejected when its canonical real path is equal to or below a canonical denied root. Symlink/junction resolution, hard-link rejection, open-handle identity checks, rename-race checks, QQ hard limits, and passive reply-budget limits remain mandatory.
 
 ## 13. Error Behavior
 
@@ -366,8 +375,7 @@ Outbound local-file paths use a denylist after the outbound feature and sender c
 - Unauthorized or group message: silently ignore the message; no Agent work or access-request state is created.
 - Gateway stopped: no Agent work is created; no replay promise is made.
 - Gateway running but unlinked: send the sole allowed user a fixed message telling them to ask the local operator to run `/qqbot-link`; no Agent work is created.
-- Pi busy: QQ input becomes a follow-up unless queue capacity is reached.
-- Queue full: return a fixed busy response.
+- Pi busy: QQ input becomes a native Pi follow-up; the extension adds no queue capacity rule.
 - Session replacement failure: retain the current link and current native Pi session.
 - Link generation mismatch: suppress the QQ reply while retaining native terminal output.
 - Takeover failure: leave the old owner untouched and report the failure locally.

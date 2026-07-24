@@ -34,7 +34,7 @@ pi install C:\absolute\path\to\pi-agent-qqbot
 
 真实配置和密钥不能提交到 Git。扩展只支持该用户的 C2C 私聊，群消息在附件下载和 Agent 工作前直接忽略。
 
-`0.7.0` 将配置升级到 `schemaVersion: 5`。schema 4 会在内存中兼容读取，但数量、大小、总量、超时、格式白名单、队列长度和展示开关不再生效。`deniedKinds`、`deniedExtensions` 和 `deniedRoots` 都是黑名单；空数组或省略字段表示不增加对应限制。
+`0.8.0` 只接受显式的 `schemaVersion: 5`。旧版本和缺少版本号的配置会以 `unsupported_schema` 拒绝加载，不做兼容读取或字段迁移。升级时必须按示例一次性替换旧结构。`deniedKinds`、`deniedExtensions` 和 `deniedRoots` 都是黑名单；空数组或省略字段表示不增加对应限制。
 
 `outboundMedia.enabled` 仍是本地文件出站总开关。启用后，空的 `deniedRoots` 允许发送 Pi 进程当前账户可读取的所有普通文件。可选外部语音转写配置放在 `inboundMedia.stt`，包含 `baseUrl`、`apiKeyEnv` 和 `model`；QQ 已提供 ASR 文本时总是优先使用 QQ 文本。
 

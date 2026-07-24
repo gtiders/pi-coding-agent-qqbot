@@ -2,7 +2,7 @@
 
 Date: 2026-07-23
 Status: Approved and implemented
-Package baseline: `pi-agent-qqbot` 0.7.0
+Package baseline: `pi-agent-qqbot` 0.8.0
 
 ## Principles
 
@@ -48,9 +48,9 @@ Package baseline: `pi-agent-qqbot` 0.7.0
 - Local outbound files use QQ `upload_prepare`, presigned chunk PUT, `upload_part_finish`, and final `/files` merge. `upload_config` controls concurrency and retry timing.
 - QQ rich media uses its documented soft limits and automatically falls back to ordinary files. The platform's 200 MB hard limit remains mandatory.
 
-## Removed Schema 4 Fields
+## Compatibility Policy
 
-The extension ignores the old enable flag, user/group arrays, command rendering options, reply formatting options, progress options, queue size, media counts, byte totals, parser limits, upload/download timeouts, format allowlists, and redundant private/group/admin switches. Schema 4 identity, deny roots, disabled media kinds, STT, link policy, sandbox selection, and debug logging are migrated in memory where meaningful.
+The extension accepts only an explicit numeric `schemaVersion: 5`. Older or unspecified schemas fail with `unsupported_schema`; no legacy field is read, inferred, or migrated. The old enable flag, user/group arrays, command rendering options, reply formatting options, progress options, queue size, media counts, byte totals, parser limits, upload/download timeouts, format allowlists, and redundant private/group/admin switches have no runtime representation.
 
 ## Security Invariants
 

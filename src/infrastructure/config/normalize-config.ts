@@ -1,4 +1,4 @@
-/** Config loading and schema migration for pi-agent-qqbot. */
+/** Strict schema 5 config normalization for pi-agent-qqbot. */
 
 import { homedir } from "node:os";
 import { extname, join } from "node:path";
@@ -30,54 +30,44 @@ export interface LoadConfigResult {
 	missing?: boolean;
 }
 
-/** Normalize schema 5 and migrate meaningful schema 4 policy without carrying obsolete limits. */
+export class UnsupportedConfigSchemaError extends Error {
+	constructor(readonly schemaVersion: unknown) {
+		super(`Unsupported config schemaVersion ${String(schemaVersion)}; expected 5`);
+		this.name = "UnsupportedConfigSchemaError";
+	}
+}
+
+/** Normalize schema 5. Older or unspecified schemas are intentionally rejected. */
 export function normalizeConfig(parsed: unknown): PiAgentQQBotConfig {
 	const raw = isRecord(parsed) ? parsed : {};
+	if (raw.schemaVersion !== 5) throw new UnsupportedConfigSchemaError(raw.schemaVersion);
 	const rawLink = record(raw.link);
 	const rawInbound = record(raw.inboundMedia);
 	const rawOutbound = record(raw.outboundMedia);
-	const legacyMedia = record(raw.media);
-	const legacyVoice = record(legacyMedia.voice);
-	const rawStt = recordOrUndefined(rawInbound.stt) ?? recordOrUndefined(legacyVoice.stt);
-	const legacyOwner = stringArray(raw.allowUsers).find((value) => value.trim()) ?? "";
-
-	const inboundDeniedKinds = normalizeKinds(rawInbound.deniedKinds);
-	if (raw.schemaVersion !== 5) {
-		const legacyImage = record(legacyMedia.image);
-		const legacyDocuments = record(legacyMedia.documents);
-		if (legacyMedia.enabled === false || legacyImage.enabled === false) inboundDeniedKinds.push("image");
-		if (legacyMedia.enabled === false || legacyVoice.enabled === false) inboundDeniedKinds.push("voice");
-		if (legacyMedia.enabled === false || legacyDocuments.enabled === false) inboundDeniedKinds.push("file");
-	}
-
-	const outboundDeniedKinds = normalizeKinds(rawOutbound.deniedKinds);
-	if (raw.schemaVersion !== 5) {
-		if (rawOutbound.images === false) outboundDeniedKinds.push("image");
-		if (rawOutbound.files === false) outboundDeniedKinds.push("file");
-	}
+	const rawStt = recordOrUndefined(rawInbound.stt);
 
 	return {
 		schemaVersion: 5,
 		appId: stringValue(raw.appId, "").trim(),
 		clientSecret: stringValue(raw.clientSecret, ""),
 		sandbox: bool(raw.sandbox, DEFAULTS.sandbox),
-		ownerOpenId: stringValue(raw.ownerOpenId, legacyOwner).trim(),
+		ownerOpenId: stringValue(raw.ownerOpenId, "").trim(),
 		link: {
 			conflictPolicy: rawLink.conflictPolicy === "takeover" ? "takeover" : "ask",
 		},
 		inboundMedia: {
-			deniedKinds: unique(inboundDeniedKinds),
+			deniedKinds: unique(normalizeKinds(rawInbound.deniedKinds)),
 			deniedExtensions: normalizeExtensions(rawInbound.deniedExtensions),
 			...(rawStt ? { stt: normalizeStt(rawStt) } : {}),
 		},
 		outboundMedia: {
 			enabled: bool(rawOutbound.enabled, DEFAULTS.outboundMedia.enabled),
 			deniedRoots: normalizeStrings(rawOutbound.deniedRoots),
-			deniedKinds: unique(outboundDeniedKinds),
+			deniedKinds: unique(normalizeKinds(rawOutbound.deniedKinds)),
 			deniedExtensions: normalizeExtensions(rawOutbound.deniedExtensions),
 		},
 		logging: {
-			level: normalizeLogLevel(record(raw.logging).level, raw.debug),
+			level: normalizeLogLevel(record(raw.logging).level),
 		},
 	};
 }
@@ -109,9 +99,8 @@ function normalizeStrings(value: unknown): string[] {
 	return unique(stringArray(value).map((item) => item.trim()).filter(Boolean));
 }
 
-function normalizeLogLevel(value: unknown, legacyDebug: unknown): "error" | "info" | "debug" {
+function normalizeLogLevel(value: unknown): "error" | "info" | "debug" {
 	if (value === "error" || value === "debug") return value;
-	if (legacyDebug === true) return "debug";
 	return "info";
 }
 

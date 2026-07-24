@@ -1,6 +1,6 @@
 {
   "name": "pi-agent-qqbot",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Connect the official QQ Bot API to a local Pi coding agent.",
   "license": "Apache-2.0",
   "type": "module",

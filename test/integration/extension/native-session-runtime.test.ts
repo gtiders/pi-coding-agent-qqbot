@@ -9,6 +9,7 @@ import { PiCommandBridge } from "../../../src/extension/pi-command-bridge.ts";
 import type { QQInboundMessage, QQKeyboard, QQReplyTarget } from "../../../src/application/ports.ts";
 
 const config = normalizeConfig({
+	schemaVersion: 5,
 	appId: "app",
 	clientSecret: "secret",
 	ownerOpenId: "USER-1",

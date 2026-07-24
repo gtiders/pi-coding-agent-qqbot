@@ -8,7 +8,7 @@ const target = resolve(process.argv[2] ?? ".");
 const agentDir = await mkdtemp(join(tmpdir(), "pi-agent-qqbot-smoke-"));
 const piArgs = ["--mode", "rpc", "--no-session", "--no-extensions", "-e", join(target, "src", "index.ts")];
 const command = process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : "pi";
-const args = process.platform === "win32" ? ["/d", "/s", "/c", "pi.cmd", ...piArgs] : piArgs;
+const args = process.platform === "win32" ? ["/d", "/s", "/c", "pi", ...piArgs] : piArgs;
 const child = spawn(command, args, {
   cwd: target,
   env: { ...process.env, PI_CODING_AGENT_DIR: agentDir },

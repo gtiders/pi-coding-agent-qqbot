@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeConfig, validateConfig } from "../../src/infrastructure/config/normalize-config.ts";
+import {
+	normalizeConfig,
+	UnsupportedConfigSchemaError,
+	validateConfig,
+} from "../../src/infrastructure/config/normalize-config.ts";
 
 test("normalizes minimal schema 5 defaults without product-level limits", () => {
-	const config = normalizeConfig({ appId: " app ", clientSecret: "secret", ownerOpenId: " USER-1 " });
+	const config = normalizeConfig({ schemaVersion: 5, appId: " app ", clientSecret: "secret", ownerOpenId: " USER-1 " });
 	assert.equal(config.schemaVersion, 5);
 	assert.equal(config.appId, "app");
 	assert.equal(config.ownerOpenId, "USER-1");
@@ -21,38 +25,18 @@ test("normalizes minimal schema 5 defaults without product-level limits", () => 
 	assert.equal(validateConfig(config), undefined);
 });
 
-test("migrates meaningful schema 4 policy and discards obsolete limits", () => {
-	const config = normalizeConfig({
-		schemaVersion: 4,
-		appId: "app",
-		clientSecret: "secret",
-		allowUsers: ["USER-1"],
-		debug: true,
-		media: {
-			image: { enabled: false, maxBytes: 1 },
-			voice: { enabled: true, stt: { baseUrl: "https://stt.example/v1/", apiKeyEnv: "STT_KEY", model: "whisper", timeoutMs: 1 } },
-			documents: { enabled: true, allowExtensions: [".txt"], maxPdfPages: 1 },
-			maxAttachments: 1,
-		},
-		outboundMedia: {
-			enabled: true,
-			images: false,
-			files: true,
-			deniedRoots: [" C:/private ", "C:/private"],
-			maxFilesPerTurn: 1,
-		},
-	});
-	assert.equal(config.ownerOpenId, "USER-1");
-	assert.deepEqual(config.inboundMedia.deniedKinds, ["image"]);
-	assert.deepEqual(config.outboundMedia.deniedKinds, ["image"]);
-	assert.deepEqual(config.outboundMedia.deniedRoots, ["C:/private"]);
-	assert.deepEqual(config.inboundMedia.stt, { baseUrl: "https://stt.example/v1", apiKeyEnv: "STT_KEY", model: "whisper" });
-	assert.equal(config.logging.level, "debug");
-	assert.equal("maxFilesPerTurn" in config.outboundMedia, false);
+test("rejects missing and obsolete schema versions", () => {
+	for (const input of [{}, { schemaVersion: 4 }, { schemaVersion: "5" }]) {
+		assert.throws(
+			() => normalizeConfig(input),
+			(error: unknown) => error instanceof UnsupportedConfigSchemaError,
+		);
+	}
 });
 
 test("normalizes deny lists as blacklists", () => {
 	const config = normalizeConfig({
+		schemaVersion: 5,
 		appId: "app",
 		clientSecret: "secret",
 		ownerOpenId: "USER-1",
@@ -68,7 +52,7 @@ test("normalizes deny lists as blacklists", () => {
 });
 
 test("requires credentials and exactly one owner identity", () => {
-	assert.match(validateConfig(normalizeConfig({ ownerOpenId: "USER" })) ?? "", /appId/);
-	assert.match(validateConfig(normalizeConfig({ appId: "app", ownerOpenId: "USER" })) ?? "", /clientSecret/);
-	assert.match(validateConfig(normalizeConfig({ appId: "app", clientSecret: "secret" })) ?? "", /ownerOpenId/);
+	assert.match(validateConfig(normalizeConfig({ schemaVersion: 5, ownerOpenId: "USER" })) ?? "", /appId/);
+	assert.match(validateConfig(normalizeConfig({ schemaVersion: 5, appId: "app", ownerOpenId: "USER" })) ?? "", /clientSecret/);
+	assert.match(validateConfig(normalizeConfig({ schemaVersion: 5, appId: "app", clientSecret: "secret" })) ?? "", /ownerOpenId/);
 });

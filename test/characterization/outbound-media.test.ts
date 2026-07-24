@@ -32,6 +32,7 @@ test("uses host-native paths and preserves outbound delivery behavior", async ()
 			},
 		};
 		const config = normalizeConfig({
+			schemaVersion: 5,
 			appId: "test",
 			clientSecret: "test",
 			ownerOpenId: "ADMIN",
@@ -63,6 +64,7 @@ test("uses host-native paths and preserves outbound delivery behavior", async ()
 
 		const deniedExtension = new QQOutboundDeliveryContext({
 			config: normalizeConfig({
+				schemaVersion: 5,
 				appId: "test",
 				clientSecret: "test",
 				ownerOpenId: "ADMIN",
@@ -88,6 +90,7 @@ test("uses host-native paths and preserves outbound delivery behavior", async ()
 		]));
 		const deniedDowngradedFile = new QQOutboundDeliveryContext({
 			config: normalizeConfig({
+				schemaVersion: 5,
 				appId: "test",
 				clientSecret: "test",
 				ownerOpenId: "ADMIN",

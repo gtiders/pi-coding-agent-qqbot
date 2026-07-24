@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -15,21 +15,26 @@ async function withRoot(run: (root: string) => Promise<void>): Promise<void> {
 	}
 }
 
-test("ignores the old filename and serializes atomic mutations", async () => {
+test("ignores the old filename and returns schema 5 defaults for a missing config", async () => {
 	await withRoot(async (root) => {
 		await writeFile(join(root, "pi-qqbot.json"), JSON.stringify({ enabled: true }));
 		const path = join(root, "pi-agent-qqbot.json");
 		const repository = new FileConfigRepository(path);
-		assert.equal((await repository.load()).missing, true);
-		await Promise.all(Array.from({ length: 100 }, (_, index) => repository.mutate((raw) => ({
-			...raw,
-			unknownField: { preserved: true },
-			allowUsers: [...(Array.isArray(raw.allowUsers) ? raw.allowUsers : []), `USER-${index}`],
-		}))));
-		const raw = JSON.parse(await readFile(path, "utf8")) as { allowUsers: string[]; unknownField: { preserved: boolean } };
-		assert.equal(raw.allowUsers.length, 100);
-		assert.equal(new Set(raw.allowUsers).size, 100);
-		assert.deepEqual(raw.unknownField, { preserved: true });
+		const loaded = await repository.load();
+		assert.equal(loaded.missing, true);
+		assert.equal(loaded.config.schemaVersion, 5);
+	});
+});
+
+test("rejects obsolete config schemas", async () => {
+	await withRoot(async (root) => {
+		const path = join(root, "pi-agent-qqbot.json");
+		const repository = new FileConfigRepository(path);
+		await writeFile(path, JSON.stringify({ schemaVersion: 4 }));
+		await assert.rejects(
+			() => repository.load(),
+			(error: unknown) => error instanceof ConfigRepositoryError && error.code === "unsupported_schema",
+		);
 	});
 });
 test("classifies malformed JSON and non-object roots", async () => {
