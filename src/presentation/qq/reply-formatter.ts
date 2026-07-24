@@ -16,13 +16,17 @@ export interface FormattedQQReply {
 	truncated: boolean;
 }
 
-export function formatQQReply(text: string): FormattedQQReply {
+export function formatQQReply(text: string, maxChunks = QQ_MAX_REPLY_CHUNKS): FormattedQQReply {
+	const chunkLimit = normalizeChunkLimit(maxChunks);
 	const normalized = normalizeMarkdown(text);
-	const source = truncateUtf8(normalized, MAX_SOURCE_BYTES);
+	const source = truncateUtf8(
+		normalized,
+		Math.min(MAX_SOURCE_BYTES, chunkLimit * (QQ_MARKDOWN_CHUNK_BYTES - PART_LABEL_RESERVE_BYTES)),
+	);
 	const markdownChunks = chunkMarkdown(
 		source.text,
 		QQ_MARKDOWN_CHUNK_BYTES - PART_LABEL_RESERVE_BYTES,
-		QQ_MAX_REPLY_CHUNKS,
+		chunkLimit,
 	);
 	const markdown = withPartLabels(markdownChunks, true);
 	// Derive fallback per Markdown chunk so msg_seq and part boundaries stay aligned.
@@ -32,6 +36,11 @@ export function formatQQReply(text: string): FormattedQQReply {
 		plain,
 		truncated: source.truncated,
 	};
+}
+
+function normalizeChunkLimit(value: number): number {
+	if (!Number.isFinite(value)) return QQ_MAX_REPLY_CHUNKS;
+	return Math.max(1, Math.min(QQ_MAX_REPLY_CHUNKS, Math.floor(value)));
 }
 
 export function normalizeMarkdown(value: string): string {

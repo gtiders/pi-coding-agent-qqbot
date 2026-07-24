@@ -25,6 +25,12 @@ import { formatQQReply } from "../presentation/qq/reply-formatter.ts";
 import { PiCommandBridge } from "./pi-command-bridge.ts";
 import { GatewayOwnership } from "./gateway-ownership.ts";
 import type { LogicalLink } from "../domain/native-session-link.ts";
+import { DualUIBridge } from "./dual-ui-bridge.ts";
+import {
+	isQQUIInteractionCommand,
+	QQUIInteractionBroker,
+	type UIInteractionDeliveryContext,
+} from "./qq-ui-interactions.ts";
 
 const UNLINKED_MESSAGE = "QQ 已连接，但尚未绑定到 Pi。请让本机操作员运行 /qqbot-link。";
 const LOCAL_ONLY_DENIAL = "该命令只能由本机 Pi 终端执行。";
@@ -138,6 +144,8 @@ export class NativeSessionRuntime {
 	private readonly outboundDeliveries = new Map<string, QQOutboundDeliveryContext>();
 	private readonly attachmentCleanups = new Map<string, () => Promise<void>>();
 	private readonly agentOutputs: string[] = [];
+	private readonly uiInteractions: QQUIInteractionBroker;
+	private readonly dualUI: DualUIBridge;
 	private readonly createTransport: NonNullable<NativeSessionRuntimeOptions["createTransport"]>;
 	private readonly createAttachmentPipeline: NonNullable<NativeSessionRuntimeOptions["createAttachmentPipeline"]>;
 	private readonly createOwnership: NonNullable<NativeSessionRuntimeOptions["createOwnership"]>;
@@ -151,6 +159,13 @@ export class NativeSessionRuntime {
 		this.createTransport = options.createTransport ?? defaultTransport;
 		this.createAttachmentPipeline = options.createAttachmentPipeline ?? ((config) => new AttachmentPipeline(config, this.state.runtimeId));
 		this.createOwnership = options.createOwnership ?? ((appId, userOpenId, onRelease) => new GatewayOwnership(appId, userOpenId, onRelease));
+		this.uiInteractions = new QQUIInteractionBroker({
+			getDeliveryContext: () => this.uiInteractionDeliveryContext(),
+			isCurrent: (origin) => this.state.isCurrentQQOrigin(origin),
+			sendCard: (target, text, budget, keyboard) => this.sendSingleReply(target, text, budget, keyboard),
+			sendStatus: (message, text) => this.sendUIStatus(message, text),
+		});
+		this.dualUI = new DualUIBridge(this.uiInteractions);
 	}
 
 	bindExtension(pi: ExtensionAPI): void {
@@ -163,7 +178,9 @@ export class NativeSessionRuntime {
 	}
 
 	onSessionStart(ctx: ExtensionContext): void {
+		this.uiInteractions.cancelAll();
 		this.currentContext = ctx;
+		this.dualUI.bind(ctx.ui);
 		this.bridge.observeSessionContext(ctx);
 		const currentSession = sessionIdentity(ctx);
 		this.currentSession = currentSession;
@@ -226,6 +243,7 @@ export class NativeSessionRuntime {
 	}
 
 	async stop(): Promise<void> {
+		this.uiInteractions.cancelAll();
 		if (this.stopPromise) return this.stopPromise;
 		if (!this.transport) {
 			this.state.setGateway("stopped");
@@ -251,6 +269,7 @@ export class NativeSessionRuntime {
 	}
 
 	unlink(): void {
+		this.uiInteractions.cancelAll();
 		this.state.unlink();
 	}
 
@@ -265,6 +284,7 @@ export class NativeSessionRuntime {
 		this.qqTargets.clear();
 		this.qqMessages.clear();
 		this.replyBudgets.clear();
+		this.uiInteractions.cancelAll();
 		for (const delivery of this.outboundDeliveries.values()) delivery.close();
 		this.outboundDeliveries.clear();
 		await Promise.allSettled([...this.attachmentCleanups.values()].map((cleanup) => cleanup()));
@@ -339,6 +359,11 @@ export class NativeSessionRuntime {
 			return;
 		}
 		const normalized = normalizeCommandText(message.text);
+		if (isQQUIInteractionCommand(normalized)) {
+			await this.uiInteractions.handleCommand(message, normalized);
+			return;
+		}
+		if (normalized && await this.uiInteractions.handleInput(message, normalized)) return;
 		if (normalized.startsWith("/")) {
 			await this.handleRemoteCommand(message, normalized);
 			return;
@@ -535,7 +560,7 @@ export class NativeSessionRuntime {
 	private async sendReply(target: QQReplyTarget, text: string, budget = new ReplyBudget(4), keyboard?: QQKeyboard): Promise<void> {
 		const transport = this.transport;
 		if (!transport) return;
-		const formatted = formatQQReply(text);
+		const formatted = formatQQReply(text, budget.remaining);
 		await deliverFormattedReply(transport.api, budget, {
 			target,
 			formatted,
@@ -543,6 +568,34 @@ export class NativeSessionRuntime {
 			...(keyboard ? { keyboard } : {}),
 			canFallback: (error) => error instanceof QQApiError && error.status >= 400 && error.status < 500,
 		});
+	}
+
+	private async sendSingleReply(target: QQReplyTarget, text: string, budget: ReplyBudget, keyboard?: QQKeyboard): Promise<void> {
+		const transport = this.transport;
+		if (!transport) throw new Error("QQ transport is not running");
+		await deliverFormattedReply(transport.api, budget, {
+			target,
+			formatted: formatQQReply(text, 1),
+			useMarkdown: true,
+			forceSingleChunk: true,
+			...(keyboard ? { keyboard } : {}),
+			canFallback: (error) => error instanceof QQApiError && error.status >= 400 && error.status < 500,
+		});
+	}
+
+	private uiInteractionDeliveryContext(): UIInteractionDeliveryContext | undefined {
+		const origin = this.acceptedOrigins[0];
+		if (!origin || origin.source !== "qq" || !this.state.isCurrentQQOrigin(origin)) return undefined;
+		if (this.state.gateway !== "running" || !this.transport) return undefined;
+		const message = this.qqMessages.get(origin.messageId);
+		const target = this.qqTargets.get(origin.messageId);
+		const budget = this.replyBudgets.get(origin.messageId);
+		if (!message || message.fake || !target || !budget || budget.remaining <= 1) return undefined;
+		return { origin, message, target, budget };
+	}
+
+	private async sendUIStatus(message: QQInboundMessage, text: string): Promise<void> {
+		await this.sendReply(targetFor(message), text, new ReplyBudget(4)).catch(() => undefined);
 	}
 
 	private requireConfig(): PiAgentQQBotConfig {
@@ -563,6 +616,7 @@ export class NativeSessionRuntime {
 	}
 
 	private async releaseQQMessage(messageId: string): Promise<void> {
+		this.uiInteractions.cancelAll(messageId);
 		this.qqTargets.delete(messageId);
 		this.qqMessages.delete(messageId);
 		this.replyBudgets.delete(messageId);

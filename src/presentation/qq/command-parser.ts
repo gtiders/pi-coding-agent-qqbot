@@ -4,13 +4,6 @@ export interface ParsedQQCommand {
 	rawArgs: string;
 }
 
-const COMMAND_ALIASES: Record<string, string> = {
-	"qqbot-help": "help",
-	"qqbot-status": "status",
-	"qqbot-last": "last",
-	cancel: "stop",
-};
-
 const MAX_COMMAND_BYTES = 2048;
 const MAX_ARGUMENTS = 20;
 
@@ -37,7 +30,7 @@ export function parseQQCommand(text: string): ParsedQQCommand | undefined {
 	const rawArgs = separator < 0 ? "" : source.slice(separator).trim();
 	const args = tokenizeArguments(rawArgs);
 	if (args.length > MAX_ARGUMENTS) throw new Error(`参数过多，最多允许 ${MAX_ARGUMENTS} 个`);
-	return { name: COMMAND_ALIASES[rawName] ?? rawName, args, rawArgs };
+	return { name: rawName, args, rawArgs };
 }
 
 function tokenizeArguments(source: string): string[] {

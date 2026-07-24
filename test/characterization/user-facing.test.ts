@@ -11,6 +11,11 @@ test("normalizes command text", () => {
 	assert.equal(parseQQCommand("／model page 2")?.rawArgs, "page 2");
 });
 
+test("does not translate removed command aliases", () => {
+	assert.equal(parseQQCommand("/qqbot-help")?.name, "qqbot-help");
+	assert.equal(parseQQCommand("/cancel")?.name, "cancel");
+});
+
 test("removes technical wrappers from session previews", () => {
 	const technical = [
 		"[QQ private user=FC9A82015BB9A80C3D51674E349BF8FD message=ROBOT1.0_abc!]",
